@@ -59,3 +59,6 @@ logs
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# local MongoDB data (pnpm db:dev)
+/.data

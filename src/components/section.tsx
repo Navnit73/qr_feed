@@ -22,11 +22,19 @@ export function Section({
 }) {
   const centred = align === "center"
   return (
-    <section id={id} className={cn("px-4 py-14 sm:px-6 sm:py-20 lg:py-24", className)}>
+    <section
+      id={id}
+      // Labelled by its heading, so it is a named region screen readers can jump to.
+      aria-labelledby={id ? `${id}-title` : undefined}
+      className={cn("px-4 py-14 sm:px-6 sm:py-20 lg:py-24", className)}
+    >
       <div className="mx-auto max-w-6xl">
         <div className={cn("reveal max-w-3xl", centred && "mx-auto text-center")}>
           {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-          <h2 className="text-[clamp(1.85rem,6.4vw,3rem)] leading-[1.08] font-bold tracking-tight text-balance">
+          <h2
+            id={id ? `${id}-title` : undefined}
+            className="text-[clamp(1.85rem,6.4vw,3rem)] leading-[1.08] font-bold tracking-tight text-balance"
+          >
             {title}
           </h2>
           {subtitle && (

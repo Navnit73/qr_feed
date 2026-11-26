@@ -13,9 +13,18 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Breadcrumbs } from "@/components/breadcrumbs"
+import { EmptyState } from "@/components/cards/empty-state"
+import { PanelCard } from "@/components/cards/panel-card"
+import { StatCard } from "@/components/cards/stat-card"
+import { AreaTrend } from "@/components/charts/area-trend"
+import { BarCompare } from "@/components/charts/bar-compare"
+import { DonutChart } from "@/components/charts/donut-chart"
+import { Icon, iconNames } from "@/components/icons"
 import { Eyebrow } from "@/components/section"
 import { cn } from "@/lib/utils"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { LoadingButtonDemo, ModalDemo, SweetAlertDemo } from "./demos"
 
 export const metadata: Metadata = {
   title: "Design system · QR Feed",
@@ -88,6 +97,44 @@ const scales = {
   ],
 }
 const steps = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]
+
+// Sample data for the chart demos, shaped like the real dashboard queries will be.
+const weekly = [
+  { day: "Mon", opened: 12, closed: 9 },
+  { day: "Tue", opened: 18, closed: 15 },
+  { day: "Wed", opened: 9, closed: 11 },
+  { day: "Thu", opened: 22, closed: 17 },
+  { day: "Fri", opened: 15, closed: 19 },
+  { day: "Sat", opened: 27, closed: 21 },
+  { day: "Sun", opened: 19, closed: 24 },
+]
+const byLocation = [
+  { location: "Washrooms", tickets: 42 },
+  { location: "Lobby", tickets: 28 },
+  { location: "Rooms F3", tickets: 19 },
+  { location: "Cafeteria", tickets: 14 },
+  { location: "Parking", tickets: 6 },
+]
+const sla = [
+  { key: "met", label: "Met", value: 182 },
+  { key: "atRisk", label: "At risk", value: 14 },
+  { key: "breached", label: "Breached", value: 9, color: "var(--destructive)" },
+]
+
+const successJson = `{
+  "ok": true,
+  "data": [{ "number": "TKT-2026-000123" }],
+  "meta": { "total": 45, "page": 1,
+            "pageSize": 20, "totalPages": 3 }
+}`
+const failureJson = `{
+  "ok": false,
+  "error": {
+    "code": "VALIDATION",
+    "message": "Check the form",
+    "details": { "email": ["Enter a valid email"] }
+  }
+}`
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -204,6 +251,170 @@ export default function DesignPage() {
           <Button>default</Button>
           <Button size="lg">lg</Button>
           <Button size="xl">xl · hero CTA</Button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <LoadingButtonDemo />
+          <Button loading variant="outline">
+            Loading
+          </Button>
+        </div>
+      </Block>
+
+      <Block title="Icons">
+        <p className="mb-4 max-w-prose text-sm text-muted-foreground">
+          Use <code className="font-mono text-foreground">{`<Icon name="sla" />`}</code> from{" "}
+          <code className="font-mono text-foreground">@/components/icons</code>, not lucide
+          directly, so a domain concept keeps one glyph everywhere.
+        </p>
+        <ul className="grid grid-cols-3 gap-2 sm:grid-cols-6 lg:grid-cols-8">
+          {iconNames.map((name) => (
+            <li
+              key={name}
+              className="flex flex-col items-center gap-2 rounded-lg border p-3 text-center"
+            >
+              <Icon name={name} className="size-5" />
+              <span className="font-mono text-[11px] text-muted-foreground">{name}</span>
+            </li>
+          ))}
+        </ul>
+      </Block>
+
+      <Block title="Stat cards">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            featured
+            label="Tickets this month"
+            value={12480}
+            icon="ticket"
+            delta={18}
+            deltaLabel="vs last month"
+          />
+          <StatCard
+            label="SLA compliance"
+            value="94%"
+            icon="sla"
+            delta={-3}
+            deltaLabel="vs last month"
+          />
+          <StatCard
+            label="Overdue CAPAs"
+            value={4}
+            icon="capa"
+            delta={-20}
+            deltaLabel="lower is better"
+            lowerIsBetter
+          />
+          <StatCard label="Avg rating" value="4.6" icon="rating" />
+        </div>
+      </Block>
+
+      <Block title="Empty states">
+        <EmptyState
+          icon="qr"
+          title="No QR codes yet"
+          description="Add a location, then print its QR code. Feedback shows up here as tickets."
+          action={
+            <Button size="xl">
+              <Icon name="qr" data-icon="inline-start" /> Create a QR code
+            </Button>
+          }
+        />
+      </Block>
+
+      <Block title="Breadcrumbs">
+        <div className="space-y-4">
+          <Breadcrumbs
+            items={[
+              { label: "Dashboard", href: "/dashboard" },
+              { label: "Branches", href: "/branches" },
+              { label: "Hotel Delhi", href: "/branches/delhi" },
+              { label: "Floor 2", href: "/branches/delhi/f2" },
+              { label: "Washroom F2" },
+            ]}
+          />
+          <Breadcrumbs
+            maxItems={5}
+            items={[
+              { label: "Dashboard", href: "/dashboard" },
+              { label: "Tickets", href: "/tickets" },
+              { label: "TKT-2026-000123" },
+            ]}
+          />
+        </div>
+      </Block>
+
+      <Block title="Dialogs & alerts">
+        <div className="space-y-6">
+          <div>
+            <p className="mb-2 text-sm font-medium">Modal: forms and details</p>
+            <ModalDemo />
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-medium">
+              Sweet alert: <code className="font-mono">useSweetAlert().fire()</code> for results and
+              confirmations
+            </p>
+            <SweetAlertDemo />
+          </div>
+        </div>
+      </Block>
+
+      <Block title="Charts">
+        <div className="grid gap-4 lg:grid-cols-3">
+          <PanelCard
+            className="lg:col-span-2"
+            title="Tickets this week"
+            description="Opened vs closed"
+            action={<Badge variant="success">+12%</Badge>}
+          >
+            <AreaTrend
+              title="Tickets this week"
+              data={weekly}
+              xKey="day"
+              series={[
+                { key: "opened", label: "Opened" },
+                { key: "closed", label: "Closed" },
+              ]}
+            />
+          </PanelCard>
+          <PanelCard title="SLA compliance" description="Last 30 days">
+            <DonutChart title="SLA compliance" data={sla} centerLabel="tickets" />
+          </PanelCard>
+          <PanelCard className="lg:col-span-3" title="Top problem locations">
+            <BarCompare
+              title="Top problem locations"
+              data={byLocation}
+              xKey="location"
+              layout="horizontal-bars"
+              series={[{ key: "tickets", label: "Tickets" }]}
+            />
+          </PanelCard>
+        </div>
+      </Block>
+
+      <Block title="API responses">
+        <p className="mb-4 max-w-prose text-sm text-muted-foreground">
+          Every route returns one envelope. Servers use{" "}
+          <code className="font-mono text-foreground">ok()</code>,{" "}
+          <code className="font-mono text-foreground">fail()</code> and{" "}
+          <code className="font-mono text-foreground">withApi()</code>; clients call{" "}
+          <code className="font-mono text-foreground">apiFetch()</code>, which never throws.
+        </p>
+        <div className="grid gap-4 md:grid-cols-2">
+          {[
+            ["Success", "success", successJson],
+            ["Failure", "destructive", failureJson],
+          ].map(([label, variant, json]) => (
+            <div key={label} className="min-w-0 overflow-hidden rounded-xl border">
+              <div className="flex items-center justify-between border-b bg-muted px-4 py-2">
+                <span className="text-sm font-medium">{label}</span>
+                <Badge variant={variant as "success" | "destructive"}>
+                  {label === "Success" ? "200" : "422"}
+                </Badge>
+              </div>
+              <pre className="overflow-x-auto p-4 font-mono text-xs leading-relaxed">{json}</pre>
+            </div>
+          ))}
         </div>
       </Block>
 

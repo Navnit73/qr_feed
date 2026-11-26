@@ -1,0 +1,2 @@
+# Fast checks before code leaves your machine; CI runs the full suite with e2e.
+pnpm typecheck && pnpm test

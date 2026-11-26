@@ -8,7 +8,7 @@ test.describe("design system page", () => {
   test("renders the hero and every section", async ({ page }) => {
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Lime for action")
     for (const name of ["Semantic colours", "Buttons", "Badges", "Alerts", "Cards & forms"]) {
-      await expect(page.getByRole("heading", { name })).toBeVisible()
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible()
     }
   })
 

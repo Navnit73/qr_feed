@@ -10,26 +10,36 @@ A Next.js app with a lime, amber, white and black design system. Read this file 
 - **Tailwind CSS v4**, configured in CSS in `src/app/globals.css`. There is no `tailwind.config`.
 - **shadcn/ui** in the `base-nova` style, built on `@base-ui/react` (not Radix). Components live in `src/components/ui/`. Class merging uses the `cn` package, re-exported from `@/lib/utils`.
 - **lucide-react** for icons, **Geist** and **Geist Mono** for fonts.
+- **MongoDB** (native driver 7, replica set for transactions) through tenant-scoped repositories in `src/server`. **Zod 4** validates every input.
+- **Better Auth** for identity only (users, sessions, password reset). Organisations, roles and branches are ours.
 - **pnpm** is the package manager. Don't use npm or yarn.
 - **Prettier** with Tailwind class sorting, and **ESLint** (Next config plus `eslint-config-prettier`).
 - **Playwright** runs end-to-end tests in Chromium.
 
 ## Commands
 
-| Command                | What it does                                                   |
-| ---------------------- | -------------------------------------------------------------- |
-| `pnpm dev`             | Dev server (port 3000, or the next free port)                  |
-| `pnpm build`           | Production build                                               |
-| `pnpm lint`            | ESLint                                                         |
-| `pnpm format`          | Prettier writes all files                                      |
-| `pnpm format:check`    | Prettier checks only (use in CI)                               |
-| `pnpm test:e2e`        | Builds, serves on :3210, runs Playwright on desktop and mobile |
-| `pnpm test:e2e:ui`     | Playwright interactive UI mode                                 |
-| `pnpm test:e2e:report` | Opens the last HTML test report                                |
+| Command                | What it does                                                     |
+| ---------------------- | ---------------------------------------------------------------- |
+| `pnpm db:dev`          | Local MongoDB replica set on 27017, data in `.data/` (no Docker) |
+| `pnpm dev`             | Dev server (port 3000, or the next free port)                    |
+| `pnpm build`           | Production build                                                 |
+| `pnpm lint`            | ESLint                                                           |
+| `pnpm format`          | Prettier writes all files                                        |
+| `pnpm format:check`    | Prettier checks only (use in CI)                                 |
+| `pnpm typecheck`       | `next typegen` (route types) then `tsc --noEmit`                 |
+| `pnpm test`            | Vitest: unit + integration (real mongod), once                   |
+| `pnpm test:unit`       | Only the fast unit/component project                             |
+| `pnpm test:int`        | Only the integration project (services against MongoDB)          |
+| `pnpm test:watch`      | Vitest in watch mode, for the red-green loop                     |
+| `pnpm test:coverage`   | Vitest with v8 coverage of `src/components` and `src/lib`        |
+| `pnpm test:e2e`        | Builds, serves on :3210, runs Playwright on desktop and mobile   |
+| `pnpm test:e2e:ui`     | Playwright interactive UI mode                                   |
+| `pnpm test:e2e:report` | Opens the last HTML test report                                  |
+| `pnpm check`           | Everything CI runs: format check, lint, types, unit, e2e         |
 
 Add a shadcn component with `pnpm dlx shadcn@latest add <name>`.
 
-Before calling work done, run `pnpm format && pnpm lint && pnpm test:e2e`.
+Before calling work done, run `pnpm format && pnpm check`.
 
 ## Layout
 
@@ -37,10 +47,69 @@ Before calling work done, run `pnpm format && pnpm lint && pnpm test:e2e`.
 src/app/            routes (App Router). /design is the live design-system reference
 src/app/globals.css design tokens, palette, base styles, utilities
 src/components/ui/  shadcn components (ours to edit; they carry our variants)
-src/components/     app components: section.tsx (Section, Eyebrow), theme-toggle.tsx
+src/app/(auth)/     sign-in, sign-up, forgot/reset password (Better Auth client)
+src/app/page.tsx    public homepage: product story + roadmap (src/lib/roadmap.ts; keep in sync with PHASES.md)
+src/app/(app)/      signed-in shell: dashboard, tickets, branches (+ QR), users, audit-log
+src/app/f/[code]    public feedback form a QR opens (no login)
+src/app/t/[token]   reporter's private tracking page
+src/app/print/      printable QR sheets (outside the app shell)
+src/app/onboarding, invite/[token], super   create org, accept invite, platform console
+src/app/api/        route handlers (use withApi + ok/fail); api/auth/[...all] is Better Auth
+src/proxy.ts        optimistic "has session cookie" redirect only (Next 16's middleware)
+src/server/         server-only: env, db/, auth/, rbac/, audit/, modules/, repositories.ts
+src/test/           Vitest helpers: global mongod, setupTestDb(), testContext()
+scripts/            dev-db.mts (local Mongo), e2e-db.mts (Playwright's Mongo)
+src/components/     the reusable kit (see "Component kit" below)
+src/lib/api/        API envelope: errors.ts, response.ts (server), client.ts (browser)
 src/lib/utils.ts    cn()
 e2e/                Playwright specs
+docs/trackers/      phase, feature, bug and test trackers (read README.md there first)
+phase.md            the product plan the trackers follow
 ```
+
+## Getting started
+
+1. `pnpm install`, then `cp .env.example .env.local` and set `BETTER_AUTH_SECRET` (`openssl rand -base64 32`).
+2. `pnpm db:dev` in one terminal, `pnpm dev` in another. Sign up at `/sign-up`.
+3. Put your email in `SUPER_ADMIN_EMAILS` to reach `/super`.
+
+## Backend rules (multi-tenancy, phase.md §4.3)
+
+- **Never touch MongoDB directly.** Use the repositories in `src/server/repositories.ts`: `branches.forTenant(ctx).find(...)`. They AND `tenantId` (and branch scope) into every query and stamp it on inserts. ESLint blocks importing `@/server/db/client` outside `src/server/{db,auth,audit}` and `modules/tenants.ts`.
+- **A new collection** = `defineRepository()` in `repositories.ts`, indexes in `db/indexes.ts` (starting with `tenantId`), and a factory in `src/server/isolation.int.test.ts`. That test fails until you add one.
+- **Every service function takes a `TenantContext`** and starts with `assertCan(ctx, "perm:name", { branchId })`. Check permissions, never role names. Hiding UI is not security.
+- **Every mutation writes `appendAudit(ctx, {...}, { session })` inside the same `withTransaction`.** The audit log is append-only and hash-chained; `verifyChain` must stay green.
+- **Validate input with `parseInput(schema, raw)`.** It throws `ApiError("VALIDATION")` with field errors that `FormField` renders under each input.
+- **Granting access:** `canGrantRoles` stops anyone giving more than they hold; keep that check on any new role or permission UI.
+- **Lookups that resolve a tenant** (invite tokens, later QR codes) use `repo.unscoped()` with a hashed or unguessable key, never a client-supplied tenantId.
+
+## Pages, actions and Cache Components
+
+- `cacheComponents` is on. Anything that reads the session, cookies, params or searchParams must sit inside `<Suspense>`. The `(app)` and `(auth)` layouts already wrap `{children}`. Standalone pages render a static shell plus `<Suspense fallback={<PageSkeleton/>}>` around an async body.
+- Pages call `requireTenantContext()` (or `requireUser()` / `requireSuperAdmin()`) themselves; `src/proxy.ts` only does the optimistic cookie check.
+- Server actions: `"use server"` files next to the route, returning `runAction(async () => { ... revalidatePath(...) })`. That gives the `ActionState` envelope. Return plain data, not ObjectIds. Forms use `useActionState` plus `FormField`, `FormSelect`, `CheckboxGroup`, `FormMessage` and `SubmitButton` from `@/components/form`.
+- Dialog forms mount fresh on open (`{open && <Form onDone=…/>}`) and close when `state.ok`. Destructive one-off actions use `useSweetAlert().fire({ onConfirm })` and throw on failure, so the alert shows the error.
+- Pure logic shared by server and client (location tree rules, time zones, `safeNext`) goes in `src/lib`, never `src/server`.
+- Public pages that only read route params (`/f/[code]`, `/t/[token]`, `/invite/[token]`) must `await connection()` before data access, or Next tries to prerender them.
+- **Forms that submit from JS** (`onSubmit` + `preventDefault`, e.g. Better Auth calls, the public form) must set `method="post"` and keep submit disabled until `useHydrated()` is true. Otherwise an early tap does a GET and leaks fields into the URL (BUG-005). Server-action forms are safe by default.
+- Style links as buttons with `buttonVariants()` (it returns merged classes). To add classes, use `cn(buttonVariants(...), "...")`.
+
+## Public intake (phase.md §6.4)
+
+- The QR short code alone resolves the tenant: `resolvePublicQr(code)` walks code → tenant → branch → location, and any inactive link makes it a dead code. Never accept a tenant or location id from the public form.
+- `submitFeedback` rate-limits by IP and by code (Mongo fixed window, `src/server/rate-limit.ts`), checks Turnstile when `TURNSTILE_SECRET_KEY` is set, and merges a repeat report (same location and category, open, within 2 h) into the open ticket.
+- Tracking and invite tokens are stored as sha256 hashes only; the raw token exists only in the link.
+- Services take config as arguments (limits, Turnstile secret), and the server action reads `env()`. That keeps services testable without env vars.
+
+## Workflow: trackers and TDD
+
+- Work is tracked in `docs/trackers/`: `PHASES.md`, `FEATURES.md` (`F-<phase>.<n>`), `BUGS.md`
+  (`BUG-nnn`) and `TESTS.md` (`T-<area>-<n>`). Update them in the same change as the code.
+- **Test first.** For a feature: write the failing Vitest and/or Playwright tests, run them and
+  see them fail, then implement. For a bug: write a test that reproduces it, then fix it, and
+  log it in `BUGS.md` with that test.
+- Unit and component tests sit next to the code as `*.test.ts(x)`. Pure logic runs in Node
+  (`// @vitest-environment node`), components in jsdom.
 
 ## Code style
 
@@ -121,6 +190,35 @@ Icons inside buttons take `data-icon="inline-start"` or `"inline-end"` for corre
 
 After adding a shadcn component, check it for hard-coded colours (`bg-black/…`, `text-white`, palette shades) and `shadow-*`. Swap them for tokens, then add its variants to the `/design` page.
 
+### Component kit
+
+Reuse these before building anything new. Each one has tests next to it and a demo on `/design`.
+
+| Need                    | Use                                                                                                                                                                     |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Button with async work  | `<Button loading>` (spinner, `aria-busy`, blocks clicks)                                                                                                                |
+| Icon                    | `<Icon name="sla" />` from `@/components/icons`; domain names, not raw lucide imports                                                                                   |
+| KPI tile                | `<StatCard label value delta lowerIsBetter featured icon />` (`@/components/cards/…`)                                                                                   |
+| Panel for a chart/table | `<PanelCard title description action footer>`                                                                                                                           |
+| Empty list              | `<EmptyState icon title description action />`                                                                                                                          |
+| Page top                | `<PageHeader title description breadcrumbs actions />`; `<PageSkeleton />` as Suspense fallback                                                                         |
+| Form fields             | `FormField`, `FormSelect`, `FormTextarea`, `CheckboxGroup`, `RadioCards`, `RatingInput`, `FormMessage`, `SubmitButton` (`@/components/form`)                            |
+| Copy / print            | `<CopyButton text />`, `<PrintButton />`                                                                                                                                |
+| Page trail              | `<Breadcrumbs items={[{label, href}]} maxItems />` (collapses long trails)                                                                                              |
+| Form/detail dialog      | `<Modal trigger title description footer size>` or controlled with `open`/`onOpenChange`                                                                                |
+| Confirm / result popup  | `const swal = useSweetAlert()`; `swal.fire({tone, title, text, confirmText, cancelText, onConfirm})` or `swal.confirm(...)`. The provider is already in the root layout |
+| Charts                  | `AreaTrend`, `BarCompare`, `DonutChart` from `@/components/charts/…`; colours come from `--chart-1…5` via `chartConfig()`                                               |
+| API route               | `export const GET = withApi(async () => ok(data, { meta: pageMeta(...) }))`; throw `new ApiError("NOT_FOUND", "…")`                                                     |
+| API call from client    | `const res = await apiFetch<T>(url, { method, json })`, then `if (!res.ok) res.error.code`; `unwrap(res)` throws                                                        |
+
+Envelope: `{ ok: true, data, meta? }` or `{ ok: false, error: { code, message, details? } }`.
+Codes and HTTP statuses are in `src/lib/api/errors.ts`. Unknown errors become `INTERNAL`, and
+their messages are never sent to the client.
+
+Gotcha (BUG-001): tailwind-merge reads `bg-dots`, `bg-glow` and `bg-glow-amber` as background
+colours, so inside one `cn()` call they knock out `bg-card` and the like. Put them on their own
+element.
+
 ### Utilities (in globals.css)
 
 - `.bg-dots`: a fine dot grid for heroes and CTAs. Set `--dot` to recolour it on dark surfaces.
@@ -131,13 +229,32 @@ After adding a shadcn component, check it for hard-coded colours (`bg-black/…`
 
 ---
 
-## Testing (Playwright and Chromium)
+## Testing
+
+### Unit and component (Vitest)
+
+- Config: `vitest.config.mts` and `vitest.setup.ts` (jest-dom matchers, cleanup, ResizeObserver
+  and matchMedia stubs). Globals are off, so import `describe`, `it` and `expect` from `vitest`.
+- Use Testing Library with `userEvent` and role-based queries. jsdom has no layout, so charts are
+  tested through their screen-reader data tables, and their real rendering in e2e.
+
+### Integration (Vitest + real MongoDB)
+
+- `*.int.test.ts` files run in the `integration` project. `src/test/global-db.ts` starts one mongod replica set (mongodb-memory-server); `setupTestDb()` gives each file its own database and clears it before each test.
+- Build contexts with `testContext({ tenantId, ...resolveAccess({ roles, branchIds }, []) })` to test as a specific role.
+
+### End-to-end (Playwright and Chromium)
 
 - Config: `playwright.config.ts`. Specs: `e2e/*.spec.ts`. It runs two projects: `desktop` (Desktop Chrome) and `mobile` (Pixel 7, also Chromium).
+- Playwright also starts a throwaway MongoDB on **27999** (`scripts/e2e-db.mts`) and passes test env vars to the server (`AUTH_RATE_LIMIT=off`, per-project super-admin emails).
+- Stop leftover servers **by port** (`kill $(lsof -ti :3210 -ti :27999)`). Next renames its process to `next-server`, so `pkill -f "next start"` misses it, and Playwright then silently reuses the stale build.
+- To test "before hydration", block `**/_next/static/chunks/**`. With JavaScript off, Suspense content never streams in.
+- Next 16 keeps visited pages mounted but hidden, so target fields with `.filter({ visible: true })`. Next's route announcer is also `role="alert"`, so filter alerts by text.
 - Tests run against a **production build on port 3210** (`E2E_PORT` overrides it). It isn't the dev server, for two reasons: Next allows only one `next dev` per project folder, and other projects on this machine often hold port 3000.
 - Locally, an already-running server on 3210 is reused. On CI (`CI=1`) it always builds fresh, retries twice and uses the GitHub reporter.
 - Artifacts (`test-results/`, `playwright-report/`) are gitignored. Screenshots are saved on failure, and traces on the first retry.
 - `e2e/design-system.spec.ts` guards the design system: brand colours on buttons, colours outside the palette compiling to nothing, no sideways scroll, the dark toggle, visible keyboard focus, and the home page loading with no console errors.
+- `e2e/components.spec.ts` covers the kit in a real browser (modal focus, sweet alert flows, chart colours) and the `/api/health` envelope.
 - Write new tests with role-based locators (`getByRole`, `getByLabel`). To compare colours, compare against a rendered palette swatch rather than hard-coding oklch or rgb strings.
 - If browsers are missing, run `pnpm exec playwright install chromium`.
 
