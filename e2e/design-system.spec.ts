@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, test, type Locator } from "@playwright/test"
 
 test.describe("design system page", () => {
   test.beforeEach(async ({ page }) => {
@@ -13,14 +13,12 @@ test.describe("design system page", () => {
   })
 
   test("primary button uses lime-600 and secondary uses amber-400", async ({ page }) => {
-    const bg = (selector: string) =>
-      page
-        .locator(selector)
-        .first()
-        .evaluate((el) => getComputedStyle(el).backgroundColor)
+    const bg = (locator: Locator) =>
+      locator.first().evaluate((el) => getComputedStyle(el).backgroundColor)
+    const button = (name: string) => page.getByRole("button", { name, exact: true })
     // Compare against the raw palette swatches rendered on the same page.
-    expect(await bg("button:has-text('Primary')")).toBe(await bg(".bg-lime-600"))
-    expect(await bg("button:has-text('Secondary')")).toBe(await bg(".bg-amber-400"))
+    expect(await bg(button("Primary"))).toBe(await bg(page.getByTitle("bg-lime-600")))
+    expect(await bg(button("Secondary"))).toBe(await bg(page.getByTitle("bg-amber-400")))
   })
 
   test("colours outside the palette compile to nothing", async ({ page }) => {
@@ -64,6 +62,8 @@ test.describe("design system page", () => {
 test("home page loads without console errors", async ({ page }) => {
   const errors: string[] = []
   page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()))
+  // Uncaught exceptions arrive as pageerror, not as console messages.
+  page.on("pageerror", (err) => errors.push(err.message))
   const res = await page.goto("/")
   expect(res?.status()).toBe(200)
   expect(errors).toEqual([])

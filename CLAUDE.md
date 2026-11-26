@@ -91,7 +91,7 @@ The tokens are in `src/app/globals.css`. Open `/design` to see every token and c
 5. **Status tints use opacity.** Soft surfaces use `bg-warning/10 text-warning border-warning/30`. The `Badge` and `Alert` variants already do this, so use them rather than re-creating them.
 6. **Focus must always be visible.** Plain elements get a global 2px lime outline. shadcn controls use a lime `ring`. Never remove both.
 7. **Mind contrast.** Lime-600 with white text is about 3:1. That's acceptable on buttons with medium-weight text at 14px or larger, never for small body text. For lime text on white, use `text-success` (lime-700). Amber always gets black text.
-8. **Mobile first.** Use a 16px side gutter (`px-4`, then `sm:px-6`), never scroll sideways, and make touch targets at least 44px (`size="xl"`, `size="icon-lg"`).
+8. **Mobile first.** Use a 16px side gutter (`px-4`, then `sm:px-6`), never scroll sideways, and make touch targets at least 44px (`size="xl"`, `size="icon-xl"`).
 
 ### Type
 
@@ -112,7 +112,7 @@ The tokens are in `src/app/globals.css`. Open `/design` to see every token and c
 | Component                | Variants                                                                                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Button`                 | `default` (lime), `secondary` (amber), `inverse`, `outline`, `ghost`, `link`, `success`, `warning`, `destructive`                                |
-| Button sizes             | `xs`, `sm`, `default`, `lg`, `xl` (hero CTA, 44px), `icon`, `icon-xs`, `icon-sm`, `icon-lg`                                                      |
+| Button sizes             | `xs`, `sm`, `default`, `lg`, `xl` (hero CTA, 44px), `icon`, `icon-xs`, `icon-sm`, `icon-lg`, `icon-xl` (44px)                                    |
 | `Badge`                  | `default`, `secondary`, `inverse`, `success`, `warning`, `destructive`, `info`, `muted`, `outline`, `ghost`, `link` (status ones are soft tints) |
 | `Alert`                  | `default`, `success`, `warning`, `destructive`, `info` (tinted border and background, icon in the status colour)                                 |
 | `Card`, `Input`, `Label` | shadcn defaults, themed by tokens                                                                                                                |

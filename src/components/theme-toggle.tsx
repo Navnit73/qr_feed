@@ -8,7 +8,7 @@ export function ThemeToggle() {
   return (
     <Button
       variant="outline"
-      size="icon-lg"
+      size="icon-xl"
       aria-label="Toggle dark mode"
       onClick={() => document.documentElement.classList.toggle("dark")}
     >

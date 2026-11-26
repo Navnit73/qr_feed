@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Eyebrow } from "@/components/section"
+import { cn } from "@/lib/utils"
 import { ThemeToggle } from "@/components/theme-toggle"
 
 export const metadata: Metadata = {
@@ -149,7 +150,10 @@ export default function DesignPage() {
                 {classes.map((cls, i) => (
                   <div key={cls} className={`h-14 ${cls}`} title={cls}>
                     <span
-                      className={`block p-1.5 font-mono text-[10px] ${i < 5 ? "text-black/60" : "text-white/80"}`}
+                      className={cn(
+                        "block p-1.5 font-mono text-[10px]",
+                        i < 5 ? "text-black/60" : "text-white/80",
+                      )}
                     >
                       {steps[i]}
                     </span>
