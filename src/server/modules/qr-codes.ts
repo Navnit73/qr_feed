@@ -172,6 +172,7 @@ export type PublicQr = {
   tenantId: ObjectId
   tenantName: string
   industry: import("@/server/modules/tenants").Industry
+  branding: import("@/server/modules/tenants").TenantBranding | null
   branchId: ObjectId
   branchName: string
   locationId: ObjectId
@@ -214,6 +215,7 @@ export async function resolvePublicQr(shortCode: string): Promise<PublicQr | nul
     tenantId: tenant._id,
     tenantName: tenant.name,
     industry: tenant.industry,
+    branding: tenant.branding ?? null,
     branchId: branch._id,
     branchName: branch.name,
     locationId: loc._id,

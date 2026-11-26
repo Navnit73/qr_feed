@@ -81,13 +81,13 @@ const FEATURES: { icon: IconName; title: string; text: string; live: boolean }[]
     icon: "sla",
     title: "SLA escalation engine",
     text: "Business hours, holidays and time zones, with pre-breach warnings.",
-    live: false,
+    live: true,
   },
   {
     icon: "capa",
     title: "RCA & CAPA built in",
     text: "5 Whys, fishbone, corrective and preventive actions, effectiveness checks.",
-    live: false,
+    live: true,
   },
 ]
 
@@ -246,9 +246,21 @@ export default function HomePage() {
       <footer className="border-t px-4 py-8 text-sm text-muted-foreground sm:px-6">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4">
           <p>© 2026 QR Feed</p>
-          <p className="flex gap-4">
+          <p className="flex flex-wrap gap-4">
+            <Link href="/help" className="hover:text-foreground">
+              Help centre
+            </Link>
             <Link href="/design" className="hover:text-foreground">
               Design system
+            </Link>
+            <Link href="/terms" className="hover:text-foreground">
+              Terms
+            </Link>
+            <Link href="/privacy" className="hover:text-foreground">
+              Privacy
+            </Link>
+            <Link href="/dpa" className="hover:text-foreground">
+              DPA
             </Link>
             <Link href="/sign-in" className="hover:text-foreground">
               Sign in

@@ -42,10 +42,11 @@ type TreeProps = {
   editable: boolean
   qrs: Map<string, QrInfo>
   canCreateQr: boolean
+  allParents: ParentOption[]
   label?: string
 }
 
-function Tree({ nodes, branchId, editable, qrs, canCreateQr, label }: TreeProps) {
+function Tree({ nodes, branchId, editable, qrs, canCreateQr, allParents, label }: TreeProps) {
   return (
     <ul aria-label={label} className={label ? "space-y-2" : "mt-2 space-y-2 border-l pl-3 sm:pl-5"}>
       {nodes.map((n) => {
@@ -83,7 +84,16 @@ function Tree({ nodes, branchId, editable, qrs, canCreateQr, label }: TreeProps)
                     <CreateQrButton locationId={id} branchId={branchId} name={n.name} />
                   )
                 )}
-                {editable && <LocationActions id={id} branchId={branchId} name={n.name} />}
+                {editable && (
+                  <LocationActions
+                    id={id}
+                    branchId={branchId}
+                    name={n.name}
+                    nodeType={n.type}
+                    parentId={n.parentId ? n.parentId.toHexString() : null}
+                    parents={allParents}
+                  />
+                )}
               </span>
             </div>
             {n.children.length > 0 && (
@@ -93,6 +103,7 @@ function Tree({ nodes, branchId, editable, qrs, canCreateQr, label }: TreeProps)
                 editable={editable}
                 qrs={qrs}
                 canCreateQr={canCreateQr}
+                allParents={allParents}
               />
             )}
           </li>
@@ -163,6 +174,7 @@ export default async function BranchPage({ params }: PageProps<"/branches/[branc
           editable={editable}
           qrs={qrs}
           canCreateQr={canCreateQr}
+          allParents={flatten(tree)}
           label="Locations"
         />
       )}

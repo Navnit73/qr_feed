@@ -20,6 +20,7 @@
     "test:unit": "vitest run --project unit",
     "test:int": "vitest run --project integration",
     "db:dev": "tsx scripts/dev-db.mts",
+    "worker": "tsx --conditions=react-server --env-file=.env.local worker/index.mts",
     "prepare": "husky",
     "db:seed": "tsx --conditions=react-server --env-file=.env.local scripts/seed.mts"
   },

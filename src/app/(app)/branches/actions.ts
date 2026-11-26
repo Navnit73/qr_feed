@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache"
 import { formObject, runAction, type ActionState } from "@/server/actions"
 import { requireTenantContext } from "@/server/auth/session"
 import { createBranch } from "@/server/modules/branches"
-import { archiveLocation, createLocation, renameLocation } from "@/server/modules/locations"
+import {
+  archiveLocation,
+  createLocation,
+  moveLocation,
+  renameLocation,
+} from "@/server/modules/locations"
 import {
   createQrCode,
   generateMissingQrCodes,
@@ -43,6 +48,16 @@ export async function archiveLocationAction(id: string, branchId: string): Promi
   const ctx = await requireTenantContext()
   return runAction(async () => {
     await archiveLocation(ctx, id)
+    revalidatePath(`/branches/${branchId}`)
+  })
+}
+
+export async function moveLocationAction(_: ActionState, form: FormData): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  const branchId = String(form.get("branchId") ?? "")
+  const parentId = String(form.get("parentId") ?? "") || null
+  return runAction(async () => {
+    await moveLocation(ctx, String(form.get("id")), parentId)
     revalidatePath(`/branches/${branchId}`)
   })
 }

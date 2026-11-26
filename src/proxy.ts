@@ -16,6 +16,13 @@ export const config = {
   matcher: [
     "/dashboard/:path*",
     "/tickets/:path*",
+    "/my-work/:path*",
+    "/verifications/:path*",
+    "/rca/:path*",
+    "/audits/:path*",
+    "/reports/:path*",
+    "/notifications/:path*",
+    "/settings/:path*",
     "/print/:path*",
     "/branches/:path*",
     "/users/:path*",

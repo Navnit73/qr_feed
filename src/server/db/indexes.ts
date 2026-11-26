@@ -49,11 +49,39 @@ export async function ensureIndexes() {
 
     d.collection("tickets").createIndex({ tenantId: 1, number: 1 }, { unique: true }),
     d.collection("tickets").createIndex({ tenantId: 1, branchId: 1, status: 1, createdAt: -1 }),
+    d.collection("tickets").createIndex({ tenantId: 1, "assignee.userId": 1, status: 1 }),
+    d.collection("tickets").createIndex({ tenantId: 1, "sla.resolveDueAt": 1, status: 1 }),
     d
       .collection("tickets")
       .createIndex({ tenantId: 1, locationId: 1, categoryId: 1, status: 1, createdAt: -1 }),
     d.collection("tickets").createIndex({ trackingTokenHashes: 1 }),
     d.collection("ticketActivities").createIndex({ tenantId: 1, ticketId: 1, at: 1 }),
+    d.collection("ticketComments").createIndex({ tenantId: 1, ticketId: 1, createdAt: 1 }),
+    d.collection("assignmentRules").createIndex({ tenantId: 1, active: 1, priority: 1 }),
+    d.collection("savedViews").createIndex({ tenantId: 1, ownerId: 1 }),
+    d.collection("notifications").createIndex({ tenantId: 1, userId: 1, readAt: 1, createdAt: -1 }),
+    d.collection("slaPolicies").createIndex({ tenantId: 1, active: 1, createdAt: 1 }),
+    d.collection("escalationEvents").createIndex({ tenantId: 1, ticketId: 1, at: 1 }),
+    d.collection("escalationEvents").createIndex({ tenantId: 1, at: -1 }),
+    d.collection("rcas").createIndex({ tenantId: 1, number: 1 }, { unique: true }),
+    d.collection("rcas").createIndex({ tenantId: 1, status: 1, createdAt: -1 }),
+    d.collection("capas").createIndex({ tenantId: 1, number: 1 }, { unique: true }),
+    d.collection("capas").createIndex({ tenantId: 1, rcaId: 1, createdAt: 1 }),
+    d.collection("auditTemplates").createIndex({ tenantId: 1, name: 1 }),
+    d.collection("audits").createIndex({ tenantId: 1, number: 1 }, { unique: true }),
+    d.collection("audits").createIndex({ tenantId: 1, branchId: 1, scheduledAt: -1 }),
+    d.collection("auditFindings").createIndex({ tenantId: 1, auditId: 1, createdAt: 1 }),
+    d
+      .collection("notificationPreferences")
+      .createIndex({ tenantId: 1, userId: 1 }, { unique: true }),
+    d.collection("savedReports").createIndex({ tenantId: 1, createdAt: -1 }),
+    d.collection("subscriptions").createIndex({ tenantId: 1 }, { unique: true }),
+    d.collection("apiKeys").createIndex({ keyHash: 1 }, { unique: true }),
+    d.collection("apiKeys").createIndex({ tenantId: 1, createdAt: -1 }),
+    d.collection("webhooks").createIndex({ tenantId: 1, active: 1 }),
+    d.collection("webhookDeliveries").createIndex({ tenantId: 1, webhookId: 1, deliveredAt: -1 }),
+    d.collection("attachments").createIndex({ tenantId: 1, entityId: 1, createdAt: -1 }),
+    d.collection("attachments").createIndex({ tenantId: 1, storageKey: 1 }, { unique: true }),
 
     d.collection("rateLimits").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
   ])

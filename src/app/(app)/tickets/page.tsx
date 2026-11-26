@@ -5,61 +5,117 @@ import { EmptyState } from "@/components/cards/empty-state"
 import { StatCard } from "@/components/cards/stat-card"
 import { Icon } from "@/components/icons"
 import { PageHeader } from "@/components/page-header"
-import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
-import type { Severity } from "@/lib/feedback-presets"
 import { requireTenantContext } from "@/server/auth/session"
-import { listTickets, ticketStats } from "@/server/modules/intake"
+import { listBranches } from "@/server/modules/branches"
+import { listCategories } from "@/server/modules/categories"
+import { ticketStats } from "@/server/modules/intake"
+import { listMembers } from "@/server/modules/members"
+import { getTenant } from "@/server/modules/tenants"
+import { listSavedViews, queryTickets } from "@/server/modules/tickets"
 import { can } from "@/server/rbac/ability"
+import { locations } from "@/server/repositories"
+import { NewTicketDialog, TicketBoard, type TicketRow } from "./ticket-controls"
 
 export const metadata: Metadata = { title: "Tickets · QR Feed" }
 
-const SEVERITY: Record<Severity, "muted" | "info" | "warning" | "destructive"> = {
-  low: "muted",
-  medium: "info",
-  high: "warning",
-  critical: "destructive",
-}
-const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "short" })
-
-function ago(date: Date, now: number) {
-  const mins = Math.round((date.getTime() - now) / 60_000)
-  if (Math.abs(mins) < 60) return rtf.format(mins, "minute")
-  const hours = Math.round(mins / 60)
-  if (Math.abs(hours) < 48) return rtf.format(hours, "hour")
-  return rtf.format(Math.round(hours / 24), "day")
-}
-
-/**
- * Basic ticket inbox: enough for P2's exit criterion (a scan shows up here). The full board,
- * filters, detail page and actions arrive in P3.
- */
 export default async function TicketsPage({ searchParams }: PageProps<"/tickets">) {
   const ctx = await requireTenantContext()
   if (!can(ctx, "ticket:read")) redirect("/dashboard")
-  const page = Math.max(1, Number((await searchParams).page) || 1)
-  const [{ items, meta }, stats] = await Promise.all([listTickets(ctx, { page }), ticketStats(ctx)])
-  // eslint-disable-next-line react-hooks/purity -- a server render happens once per request
+
+  const sp = await searchParams
+  const str = (v: unknown) => (typeof v === "string" && v !== "all" ? v : undefined)
+  const page = Math.max(1, Number(sp.page) || 1)
+  const view = sp.view === "kanban" ? "kanban" : "table"
+  const filters = {
+    status: str(sp.status),
+    severity: str(sp.severity),
+    branchId: str(sp.branchId),
+    categoryId: str(sp.categoryId),
+    assigneeId: str(sp.assigneeId),
+    q: str(sp.q),
+  }
+
+  const tenant = await getTenant(ctx.tenantId)
+  const [{ items, meta }, stats, branchDocs, categoryDocs, memberDocs, locationDocs, savedViews] =
+    await Promise.all([
+      queryTickets(ctx, { ...filters, page, pageSize: view === "kanban" ? 60 : 25 }),
+      ticketStats(ctx),
+      can(ctx, "branch:read") ? listBranches(ctx) : [],
+      listCategories(ctx, tenant?.industry ?? "other"),
+      can(ctx, "user:read") ? listMembers(ctx) : [],
+      can(ctx, "ticket:create")
+        ? locations.forTenant(ctx).find({ status: "active" }, { sort: { path: 1 }, limit: 200 })
+        : [],
+      listSavedViews(ctx),
+    ])
+
+  // eslint-disable-next-line react-hooks/purity -- single server render per request
   const now = Date.now()
+  const rows: TicketRow[] = items.map((t) => ({
+    id: t._id.toHexString(),
+    number: t.number,
+    locationName: t.locationPath.at(-1) ?? "",
+    locationParent: t.locationPath.slice(0, -1).join(" › "),
+    categoryName: t.categoryName,
+    description: t.description,
+    severity: t.severity,
+    status: t.status,
+    rating: t.rating,
+    reportCount: t.reportCount,
+    assigneeName: t.assignee?.name ?? null,
+    currentLevel: t.currentLevel ?? 1,
+    slaBreached: Boolean(t.sla?.breached),
+    slaPaused: Boolean(t.sla?.pausedAt),
+    resolveDueAt: t.sla?.resolveDueAt ? t.sla.resolveDueAt.toISOString() : null,
+    createdAt: t.createdAt.toISOString(),
+  }))
+
+  const branchOptions = branchDocs.map((b) => ({ value: b._id.toHexString(), label: b.name }))
+  const categoryOptions = categoryDocs.map((c) => ({ value: c._id.toHexString(), label: c.label }))
+  const memberOptions = memberDocs
+    .filter((m) => m.status === "active")
+    .map((m) => ({ value: m.userId, label: m.name }))
+  const locationOptions = locationDocs.map((l) => ({
+    value: l._id.toHexString(),
+    label: l.path.join(" › "),
+  }))
+
+  const hasFilters = Object.values(filters).some(Boolean)
 
   return (
     <>
       <PageHeader
         title="Tickets"
-        description="Every report from your QR codes, newest first."
+        description="Track, assign, work and verify every QR or manual report."
         breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Tickets" }]}
+        actions={
+          <>
+            <Link href="/my-work" className={buttonVariants({ variant: "outline", size: "xl" })}>
+              <Icon name="myWork" data-icon="inline-start" /> My work
+            </Link>
+            {can(ctx, "ticket:create") && (
+              <NewTicketDialog
+                locations={locationOptions}
+                categories={categoryOptions}
+                members={memberOptions}
+              />
+            )}
+          </>
+        }
       />
+
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <StatCard label="Open" value={stats.open} icon="ticket" />
         <StatCard label="Last 24 hours" value={stats.last24h} icon="sla" />
         <StatCard label="Average rating (30 days)" value={stats.avgRating ?? "–"} icon="rating" />
       </div>
 
-      {items.length === 0 ? (
+      {items.length === 0 && !hasFilters ? (
         <EmptyState
           icon="qr"
           title="No tickets yet"
-          description="Create QR codes for your locations and put them up. Reports land here the moment someone scans."
+          description="Create QR codes for your locations and put them up, or log a manual ticket above."
           action={
             <Link href="/branches" className={buttonVariants({ size: "xl" })}>
               <Icon name="qr" data-icon="inline-start" /> Set up QR codes
@@ -67,97 +123,28 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
           }
         />
       ) : (
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full min-w-[760px] text-sm">
-            <thead className="bg-muted text-left text-muted-foreground">
-              <tr>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  Ticket
-                </th>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  Where
-                </th>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  About
-                </th>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  Severity
-                </th>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  Rating
-                </th>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-2.5 font-medium">
-                  Reported
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {items.map((t) => (
-                <tr key={t._id.toHexString()} className="align-top">
-                  <td className="px-4 py-3">
-                    <span className="font-mono text-xs font-medium whitespace-nowrap">
-                      {t.number}
-                    </span>
-                    {t.reportCount > 1 && (
-                      <span className="mt-1 block text-xs text-muted-foreground tabular-nums">
-                        {t.reportCount} reports
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="font-medium">{t.locationPath.at(-1)}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {t.locationPath.slice(0, -1).join(" › ")}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {t.categoryName}
-                    {t.description && (
-                      <span className="mt-1 line-clamp-2 block max-w-64 text-xs text-muted-foreground">
-                        {t.description}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant={SEVERITY[t.severity]} className="capitalize">
-                      {t.severity}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap tabular-nums">
-                    {t.rating ? (
-                      <span className="inline-flex items-center gap-1">
-                        <Icon name="rating" className="size-3.5 fill-current text-secondary" />{" "}
-                        {t.rating}
-                      </span>
-                    ) : (
-                      "–"
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge
-                      variant={t.status === "new" ? "secondary" : "muted"}
-                      className="capitalize"
-                    >
-                      {t.status.replace("_", " ")}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                    {ago(t.createdAt, now)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TicketBoard
+          items={rows}
+          view={view}
+          filters={filters}
+          branches={branchOptions}
+          categories={categoryOptions}
+          members={memberOptions}
+          savedViews={savedViews.map((v) => ({
+            id: v._id.toHexString(),
+            name: v.name,
+            shared: v.shared,
+            filters: v.filters,
+          }))}
+          canAssign={can(ctx, "ticket:assign")}
+          now={now}
+        />
       )}
 
-      {meta.totalPages > 1 && (
+      {meta.totalPages > 1 && view === "table" && (
         <nav aria-label="Pagination" className="mt-4 flex items-center justify-between text-sm">
           <span className="text-muted-foreground tabular-nums">
-            Page {meta.page} of {meta.totalPages}
+            Page {meta.page} of {meta.totalPages} ({meta.total} tickets)
           </span>
           <span className="flex gap-2">
             {meta.page > 1 && (

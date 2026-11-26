@@ -9,6 +9,7 @@ describe("ROADMAP", () => {
 
   it("never marks a phase done before an earlier one", () => {
     const firstUnfinished = ROADMAP.findIndex((p) => p.status !== "done")
+    if (firstUnfinished === -1) return
     const doneLater = ROADMAP.slice(firstUnfinished).some((p) => p.status === "done")
     expect(doneLater).toBe(false)
   })

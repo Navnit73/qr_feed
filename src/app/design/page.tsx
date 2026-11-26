@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { AlertTriangle, ArrowRight, CheckCircle2, Info, QrCode, XCircle } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,7 +25,7 @@ import { Icon, iconNames } from "@/components/icons"
 import { Eyebrow } from "@/components/section"
 import { cn } from "@/lib/utils"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { LoadingButtonDemo, ModalDemo, SweetAlertDemo } from "./demos"
+import { LoadingButtonDemo, ModalDemo, ShellPrimitivesDemo, SweetAlertDemo } from "./demos"
 
 export const metadata: Metadata = {
   title: "Design system · QR Feed",
@@ -355,6 +356,25 @@ export default function DesignPage() {
               confirmations
             </p>
             <SweetAlertDemo />
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-medium">
+              Shell primitives: Sheet, DropdownMenu &amp; Avatar
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <ShellPrimitivesDemo />
+              <div className="flex items-center gap-2">
+                <Avatar size="sm">
+                  <AvatarFallback>AR</AvatarFallback>
+                </Avatar>
+                <Avatar>
+                  <AvatarFallback className="bg-foreground text-background">AR</AvatarFallback>
+                </Avatar>
+                <Avatar size="lg">
+                  <AvatarFallback className="bg-primary text-primary-foreground">QF</AvatarFallback>
+                </Avatar>
+              </div>
+            </div>
           </div>
         </div>
       </Block>

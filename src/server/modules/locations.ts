@@ -169,3 +169,87 @@ export async function archiveLocation(ctx: TenantContext, idRaw: ObjectId | stri
     )
   })
 }
+
+export async function moveLocation(
+  ctx: TenantContext,
+  idRaw: ObjectId | string,
+  newParentIdRaw: ObjectId | string | null,
+) {
+  const loc = await loadForWrite(ctx, idRaw)
+  const newParentId = newParentIdRaw ? parseInput(objectId, newParentIdRaw) : null
+
+  if (newParentId && newParentId.equals(loc._id)) {
+    throw new ApiError("VALIDATION", "A location can't be moved inside itself.", {
+      parentId: ["Pick a different parent"],
+    })
+  }
+
+  let nextAncestors: ObjectId[] = []
+  let nextPath: string[] = [loc.name]
+
+  if (newParentId) {
+    const parent = await locations.forTenant(ctx).findById(newParentId)
+    if (!parent || parent.status !== "active") {
+      throw new ApiError("NOT_FOUND", "Target parent location not found.")
+    }
+    if (!parent.branchId.equals(loc.branchId)) {
+      throw new ApiError("VALIDATION", "Cannot move a location into a different branch.", {
+        parentId: ["Pick a parent in the same branch"],
+      })
+    }
+    if (parent.ancestors.some((a) => a.equals(loc._id))) {
+      throw new ApiError("VALIDATION", "Cannot move a location inside one of its own children.", {
+        parentId: ["Cannot move into a descendant"],
+      })
+    }
+    if (!canNest(parent.type, loc.type)) {
+      throw new ApiError("VALIDATION", `A ${loc.type} can't go inside a ${parent.type}.`, {
+        parentId: [`A ${loc.type} can't go inside a ${parent.type}`],
+      })
+    }
+    nextAncestors = [...parent.ancestors, parent._id]
+    nextPath = [...parent.path, loc.name]
+  } else if (!canNest(null, loc.type)) {
+    throw new ApiError("VALIDATION", `A ${loc.type} can't sit at the top level.`)
+  }
+
+  return withTransaction(async (session) => {
+    const repo = locations.forTenant(ctx)
+    const oldAncestorsLen = loc.ancestors.length
+    const oldPathLen = loc.path.length
+    const descendants = await repo.find({ ancestors: loc._id, status: "active" }, { session })
+
+    await repo.updateOne(
+      { _id: loc._id },
+      { $set: { parentId: newParentId, ancestors: nextAncestors, path: nextPath } },
+      { session },
+    )
+
+    for (const desc of descendants) {
+      const suffixAncestors = desc.ancestors.slice(oldAncestorsLen)
+      const suffixPath = desc.path.slice(oldPathLen)
+      await repo.updateOne(
+        { _id: desc._id },
+        {
+          $set: {
+            ancestors: [...nextAncestors, ...suffixAncestors],
+            path: [...nextPath, ...suffixPath],
+          },
+        },
+        { session },
+      )
+    }
+
+    await appendAudit(
+      ctx,
+      {
+        action: "location.moved",
+        entity: "location",
+        entityId: loc._id,
+        before: { path: loc.path },
+        after: { path: nextPath },
+      },
+      { session },
+    )
+  })
+}

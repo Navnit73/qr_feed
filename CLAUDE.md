@@ -22,6 +22,7 @@ A Next.js app with a lime, amber, white and black design system. Read this file 
 | ---------------------- | ---------------------------------------------------------------- |
 | `pnpm db:dev`          | Local MongoDB replica set on 27017, data in `.data/` (no Docker) |
 | `pnpm dev`             | Dev server (port 3000, or the next free port)                    |
+| `pnpm worker`          | Standalone SLA escalation, auto-close & retention sweep worker   |
 | `pnpm build`           | Production build                                                 |
 | `pnpm lint`            | ESLint                                                           |
 | `pnpm format`          | Prettier writes all files                                        |
@@ -49,14 +50,15 @@ src/app/globals.css design tokens, palette, base styles, utilities
 src/components/ui/  shadcn components (ours to edit; they carry our variants)
 src/app/(auth)/     sign-in, sign-up, forgot/reset password (Better Auth client)
 src/app/page.tsx    public homepage: product story + roadmap (src/lib/roadmap.ts; keep in sync with PHASES.md)
-src/app/(app)/      signed-in shell: dashboard, tickets, branches (+ QR), users, audit-log
-src/app/f/[code]    public feedback form a QR opens (no login)
-src/app/t/[token]   reporter's private tracking page
-src/app/print/      printable QR sheets (outside the app shell)
-src/app/onboarding, invite/[token], super   create org, accept invite, platform console
-src/app/api/        route handlers (use withApi + ok/fail); api/auth/[...all] is Better Auth
+src/app/(app)/      signed-in shell: dashboard, tickets, my-work, verifications, rca, audits, reports, branches (+ QR), users, settings, notifications, audit-log
+src/app/f/[code]    public feedback form a QR opens (no login, 5 languages + RTL + photos)
+src/app/t/[token]   reporter's private tracking page + post-closure satisfaction feedback
+src/app/print/      printable QR sheets, ticket history, RCA/CAPA & audit reports (outside the app shell)
+src/app/onboarding, invite/[token], super, help, terms, privacy, dpa   onboarding, invites, platform console, help & legal pages
+src/app/api/        route handlers (use withApi + ok/fail); api/auth/[...all], api/v1/*, api/webhooks/*, api/cron/*
 src/proxy.ts        optimistic "has session cookie" redirect only (Next 16's middleware)
-src/server/         server-only: env, db/, auth/, rbac/, audit/, modules/, repositories.ts
+src/server/         server-only: env, db/, auth/, rbac/, audit/, modules/, repositories.ts, storage.ts, mail.ts
+worker/             standalone SLA escalation & maintenance worker (worker/index.mts)
 src/test/           Vitest helpers: global mongod, setupTestDb(), testContext()
 scripts/            dev-db.mts (local Mongo), e2e-db.mts (Playwright's Mongo)
 src/components/     the reusable kit (see "Component kit" below)

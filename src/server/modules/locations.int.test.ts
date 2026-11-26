@@ -7,6 +7,7 @@ import {
   archiveLocation,
   createLocation,
   getLocationTree,
+  moveLocation,
   renameLocation,
 } from "@/server/modules/locations"
 import { createBranch } from "@/server/modules/branches"
@@ -150,5 +151,48 @@ describe("locations", () => {
     await renameLocation(ctx, f._id, "G")
     const actions = (await listAudit(ctx)).items.map((e) => e.action)
     expect(actions.slice(0, 2)).toEqual(["location.renamed", "location.created"])
+  })
+
+  it("moves a location and rewrites ancestors and paths for all descendants", async () => {
+    const { ctx, branch } = await setup()
+    const b1 = await createLocation(ctx, {
+      branchId: branch._id,
+      type: "building",
+      name: "Block A",
+    })
+    const b2 = await createLocation(ctx, {
+      branchId: branch._id,
+      type: "building",
+      name: "Block B",
+    })
+    const floor = await createLocation(ctx, {
+      branchId: branch._id,
+      parentId: b1._id,
+      type: "floor",
+      name: "Floor 1",
+    })
+    const room = await createLocation(ctx, {
+      branchId: branch._id,
+      parentId: floor._id,
+      type: "location",
+      name: "Room 101",
+    })
+
+    await moveLocation(ctx, floor._id, b2._id)
+    const tree = await getLocationTree(ctx, branch._id)
+    const blockB = tree.find((n) => n._id.equals(b2._id))!
+    expect(blockB.children[0].path).toEqual(["Block B", "Floor 1"])
+    expect(blockB.children[0].children[0].path).toEqual(["Block B", "Floor 1", "Room 101"])
+    expect(blockB.children[0].children[0].ancestors.map(String)).toEqual([
+      String(b2._id),
+      String(floor._id),
+    ])
+
+    // Moving into itself or a descendant is rejected
+    expect(await codeOf(moveLocation(ctx, floor._id, floor._id))).toBe("VALIDATION")
+    expect(await codeOf(moveLocation(ctx, b2._id, room._id))).toBe("VALIDATION")
+
+    // Moving a building inside a floor is rejected by nesting rules
+    expect(await codeOf(moveLocation(ctx, b1._id, floor._id))).toBe("VALIDATION")
   })
 })

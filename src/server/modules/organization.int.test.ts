@@ -54,6 +54,18 @@ describe("createOrganization()", () => {
     expect(second.tenant.slug).toMatch(/^acme-hotels-[a-z0-9]{4}$/)
   })
 
+  // BUG-006: concurrent onboarding with the exact same organisation name hit E11000 on slug_1.
+  it("handles concurrent onboarding with identical organisation names without E11000", async () => {
+    const results = await Promise.all([
+      createOrganization({ ...owner, id: "c1", email: "c1@acme.test" }, input),
+      createOrganization({ ...owner, id: "c2", email: "c2@acme.test" }, input),
+      createOrganization({ ...owner, id: "c3", email: "c3@acme.test" }, input),
+      createOrganization({ ...owner, id: "c4", email: "c4@acme.test" }, input),
+    ])
+    const slugs = new Set(results.map((r) => r.tenant.slug))
+    expect(slugs.size).toBe(4)
+  })
+
   it("rejects bad input field by field", async () => {
     const err = await errorOf(
       createOrganization(owner, { ...input, orgName: " ", timezone: "Mars/Olympus" }),

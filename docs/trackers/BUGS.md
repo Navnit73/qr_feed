@@ -19,6 +19,7 @@ workaround exists · **S4** cosmetic.
 | BUG-003 | Blank feedback said "expected string" instead of asking for a category | S3  | 2026-11-26 | 2026-11-26 | F-2.3        | T-INT-1         |
 | BUG-004 | Outline links styled as buttons had no border                          | S4  | 2026-11-26 | 2026-11-26 | F-0.3        | T-UI-1          |
 | BUG-005 | **Password in the URL** if sign-in/up was submitted before hydration   | S1  | 2026-11-26 | 2026-11-26 | F-1.2, F-2.3 | T-E2E-4         |
+| BUG-006 | Concurrent onboarding with identical org name failed with `E11000`     | S2  | 2026-11-26 | 2026-11-26 | F-1.1        | T-ORG-1         |
 
 ---
 
@@ -76,6 +77,15 @@ workaround exists · **S4** cosmetic.
   (`useHydrated()`). Applies to the auth forms and the public feedback form.
 - **Test:** `phase1.spec.ts` › "before the page is interactive" (blocks the JS bundles).
 - **Rule:** any form that submits from JS must do both. Server-action forms are safe by default.
+
+## BUG-006 · Concurrent onboarding hit duplicate slug (`E11000`)
+
+- **Steps:** two users onboard simultaneously with the exact same organisation name (caught by parallel Playwright workers in `dashboard.spec.ts`).
+- **Expected:** both organisations succeed with unique slugs.
+- **Actual:** one succeeded and the other failed with `MongoServerError: E11000 duplicate key error ... index: slug_1`.
+- **Cause:** `uniqueSlug()` checked availability with `findOne` before the transaction inserted, creating a TOCTOU race.
+- **Fix:** `createOrganization()` (`src/server/modules/onboarding.ts`) retries the transaction with a fresh random suffix when MongoDB throws `E11000`.
+- **Test:** `organization.int.test.ts` › "handles concurrent onboarding with identical organisation names without E11000".
 
 ---
 

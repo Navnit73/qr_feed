@@ -1,6 +1,11 @@
 import "server-only"
 import { z } from "zod"
 
+const optionalNonEmpty = z
+  .string()
+  .optional()
+  .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined))
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   MONGODB_URI: z
@@ -26,8 +31,34 @@ const schema = z.object({
   /** Rate limits on the public feedback form. "off" only for automated tests. */
   INTAKE_RATE_LIMIT: z.enum(["on", "off"]).default("on"),
   /** Cloudflare Turnstile on the public form. Both set = on; both empty = off. */
-  TURNSTILE_SECRET_KEY: z.string().optional(),
-  NEXT_PUBLIC_TURNSTILE_SITE_KEY: z.string().optional(),
+  TURNSTILE_SECRET_KEY: optionalNonEmpty,
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: optionalNonEmpty,
+
+  // ── Object storage (Cloudflare R2 or AWS S3; falls back to local .data/uploads) ──
+  STORAGE_ENDPOINT: optionalNonEmpty,
+  STORAGE_REGION: z.string().default("auto"),
+  STORAGE_BUCKET: optionalNonEmpty,
+  STORAGE_ACCESS_KEY_ID: optionalNonEmpty,
+  STORAGE_SECRET_ACCESS_KEY: optionalNonEmpty,
+  STORAGE_LOCAL_DIR: optionalNonEmpty,
+
+  // ── Notifications (Resend email + Twilio SMS/WhatsApp; logs in dev when unset) ──
+  RESEND_API_KEY: optionalNonEmpty,
+  MAIL_FROM: z.string().default("QR Feed <notifications@qrfeed.local>"),
+  TWILIO_ACCOUNT_SID: optionalNonEmpty,
+  TWILIO_AUTH_TOKEN: optionalNonEmpty,
+  TWILIO_FROM: optionalNonEmpty,
+  TWILIO_WHATSAPP_FROM: optionalNonEmpty,
+
+  // ── Worker / SLA queue / Cron ──────────────────────────────────────────────────
+  REDIS_URL: optionalNonEmpty,
+  CRON_SECRET: optionalNonEmpty,
+
+  // ── Billing (Stripe / Razorpay; sandbox mode when unset) ───────────────────────
+  STRIPE_SECRET_KEY: optionalNonEmpty,
+  STRIPE_WEBHOOK_SECRET: optionalNonEmpty,
+  RAZORPAY_KEY_ID: optionalNonEmpty,
+  RAZORPAY_KEY_SECRET: optionalNonEmpty,
 })
 
 export type Env = z.infer<typeof schema>

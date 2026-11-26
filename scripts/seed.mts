@@ -11,12 +11,15 @@ import { auth } from "@/server/auth/auth"
 import { resolveTenantContext } from "@/server/auth/context"
 import { mongoClient } from "@/server/db/client"
 import { ensureIndexes } from "@/server/db/indexes"
+import { createAuditTemplate } from "@/server/modules/audits"
 import { createBranch } from "@/server/modules/branches"
 import { listCategories } from "@/server/modules/categories"
 import { submitFeedback } from "@/server/modules/intake"
 import { createLocation } from "@/server/modules/locations"
 import { createOrganization } from "@/server/modules/onboarding"
 import { generateMissingQrCodes, listQrCodes } from "@/server/modules/qr-codes"
+import { createCapa, createRca } from "@/server/modules/rca-capa"
+import { createSlaPolicy } from "@/server/modules/sla"
 import type { TenantContext } from "@/server/db/tenant-context"
 import type { ObjectId } from "mongodb"
 
@@ -157,6 +160,39 @@ async function main() {
     (await generateMissingQrCodes(ctx, second._id))
   console.info(`✓ ${made} QR codes`)
 
+  await createSlaPolicy(ctx, {
+    name: "Hospital Standard SLA",
+    businessHoursMode: "24x7",
+    appliesTo: {},
+    levels: [
+      {
+        level: 1,
+        acceptWithinMin: 15,
+        resolveWithinMin: 180,
+        escalateAfterMin: 180,
+        targetRole: "l1_staff",
+        action: "both",
+      },
+      {
+        level: 2,
+        acceptWithinMin: 30,
+        resolveWithinMin: 300,
+        escalateAfterMin: 300,
+        targetRole: "l2_supervisor",
+        action: "both",
+      },
+      {
+        level: 3,
+        acceptWithinMin: 60,
+        resolveWithinMin: 480,
+        escalateAfterMin: 480,
+        targetRole: "l3_manager",
+        action: "both",
+      },
+    ],
+  })
+  console.info("✓ SLA policy")
+
   const cats = await listCategories(ctx, "hospital")
   const byKey = new Map(cats.map((c) => [c.key, c._id.toHexString()]))
   const codes = await listQrCodes(ctx, branch._id)
@@ -178,6 +214,46 @@ async function main() {
     tickets++
   }
   console.info(`✓ ${tickets} feedback tickets`)
+
+  const rca = await createRca(ctx, {
+    title: "Recurring wet floors outside Emergency washrooms",
+    method: "5why",
+    problemStatement:
+      "Multiple slip hazards reported near Ground Floor washrooms during peak OPD hours.",
+    sourceTicketIds: [],
+  })
+  await createCapa(ctx, {
+    rcaId: rca._id.toHexString(),
+    title: "Add dry-pass signage & hourly inspection log",
+    type: "preventive",
+    effectivenessDueDays: 30,
+    effectivenessMethod: "30-day zero recurrence review",
+    actions: [
+      {
+        title: "Install wall-mounted caution cones at GF and F2 washrooms",
+        ownerId: user.id,
+        dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      },
+    ],
+  })
+  await createAuditTemplate(ctx, {
+    name: "NABH Hygiene & Safety Walk",
+    standard: "NABH 5th Ed.",
+    items: [
+      {
+        clause: "HIC.1",
+        section: "Infection Control",
+        question: "Hand rub dispensers stocked and functional?",
+      },
+      {
+        clause: "FMS.4",
+        section: "Facility Safety",
+        question: "Wet-floor signage present during cleaning?",
+      },
+      { clause: "CQI.3", section: "Quality", question: "Previous CAPA actions verified on floor?" },
+    ],
+  })
+  console.info("✓ RCA/CAPA & audit template")
 
   console.info(`\nSign in at /sign-in with ${DEMO.email} / ${DEMO.password}`)
 }

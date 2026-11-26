@@ -10,6 +10,7 @@ import {
   setMemberStatus,
   updateMemberAccess,
 } from "@/server/modules/members"
+import { createCustomRole, deleteCustomRole, updateCustomRole } from "@/server/modules/roles"
 
 export async function inviteAction(
   _: ActionState<{ link: string }>,
@@ -48,6 +49,31 @@ export async function setMemberStatusAction(
   const ctx = await requireTenantContext()
   return runAction(async () => {
     await setMemberStatus(ctx, id, status)
+    revalidatePath("/users")
+  })
+}
+
+export async function createRoleAction(_: ActionState, form: FormData): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    await createCustomRole(ctx, formObject(form, ["permissions"]) as never)
+    revalidatePath("/users")
+  })
+}
+
+export async function updateRoleAction(_: ActionState, form: FormData): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    const input = formObject(form, ["permissions"])
+    await updateCustomRole(ctx, String(input.id), input as never)
+    revalidatePath("/users")
+  })
+}
+
+export async function deleteRoleAction(id: string): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    await deleteCustomRole(ctx, id)
     revalidatePath("/users")
   })
 }

@@ -6,11 +6,12 @@ import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
 import { useSweetAlert } from "@/components/sweet-alert"
 import { Button } from "@/components/ui/button"
-import { childTypes, LOCATION_TYPE_LABELS, type LocationType } from "@/lib/location-tree"
+import { canNest, childTypes, LOCATION_TYPE_LABELS, type LocationType } from "@/lib/location-tree"
 import {
   archiveLocationAction,
   createBranchAction,
   createLocationAction,
+  moveLocationAction,
   renameLocationAction,
 } from "./actions"
 
@@ -183,17 +184,64 @@ function RenameForm({
   )
 }
 
-/** Rename and archive controls for one tree node. */
+function MoveForm({
+  id,
+  branchId,
+  nodeType,
+  currentParentId,
+  parents,
+  onDone,
+}: {
+  id: string
+  branchId: string
+  nodeType: LocationType
+  currentParentId: string | null
+  parents: ParentOption[]
+  onDone: () => void
+}) {
+  const [state, action] = useActionState(moveLocationAction, null)
+  useCloseOnSuccess(state, onDone)
+  const validParents = parents.filter((p) => p.id !== id && canNest(p.type, nodeType))
+  return (
+    <form action={action} className="space-y-4">
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="branchId" value={branchId} />
+      <FormSelect
+        label="Move inside"
+        name="parentId"
+        defaultValue={currentParentId ?? ""}
+        state={state}
+        options={[
+          ...(canNest(null, nodeType)
+            ? [{ value: "", label: "Top level (the branch itself)" }]
+            : []),
+          ...validParents.map((p) => ({ value: p.id, label: p.label })),
+        ]}
+      />
+      <FormMessage state={state} />
+      <DialogButtons onCancel={onDone} submit="Move" />
+    </form>
+  )
+}
+
+/** Rename, move and archive controls for one tree node. */
 export function LocationActions({
   id,
   branchId,
   name,
+  nodeType,
+  parentId,
+  parents,
 }: {
   id: string
   branchId: string
   name: string
+  nodeType: LocationType
+  parentId: string | null
+  parents: ParentOption[]
 }) {
   const [open, setOpen] = useState(false)
+  const [moveOpen, setMoveOpen] = useState(false)
   const swal = useSweetAlert()
   return (
     <div className="flex shrink-0 gap-1">
@@ -209,6 +257,28 @@ export function LocationActions({
       >
         {open && (
           <RenameForm id={id} branchId={branchId} name={name} onDone={() => setOpen(false)} />
+        )}
+      </Modal>
+      <Modal
+        open={moveOpen}
+        onOpenChange={setMoveOpen}
+        title={`Move ${name}`}
+        description="Updates this location and everything inside it."
+        trigger={
+          <Button variant="ghost" size="sm" aria-label={`Move ${name}`}>
+            Move
+          </Button>
+        }
+      >
+        {moveOpen && (
+          <MoveForm
+            id={id}
+            branchId={branchId}
+            nodeType={nodeType}
+            currentParentId={parentId}
+            parents={parents}
+            onDone={() => setMoveOpen(false)}
+          />
         )}
       </Modal>
       <Button

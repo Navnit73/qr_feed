@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
+import { mainNav, navTo, signOut } from "./shell"
 
 // Phase 1 user journeys against a real server and a throwaway MongoDB (see playwright.config).
 // Every test signs up its own user and organisation, so tests stay independent and parallel.
@@ -40,11 +41,6 @@ async function newAdmin(page: Page, orgName = `Acme ${Date.now()}`) {
   return { email, orgName }
 }
 
-async function signOut(page: Page) {
-  await page.getByRole("button", { name: "Sign out" }).click()
-  await expect(page).toHaveURL(/\/sign-in/)
-}
-
 test("signed-out visitors are sent to sign-in and returned afterwards", async ({ page }) => {
   await page.goto("/users")
   await expect(page).toHaveURL(/\/sign-in\?next=%2Fusers/)
@@ -53,8 +49,9 @@ test("signed-out visitors are sent to sign-in and returned afterwards", async ({
 test("a new user signs up and creates their organisation", async ({ page }) => {
   const { orgName } = await newAdmin(page)
   await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible()
-  await expect(page.getByText(orgName).first()).toBeVisible()
-  await expect(page.getByText("Branches", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(orgName).filter({ visible: true }).first()).toBeVisible()
+  const nav = await mainNav(page)
+  await expect(nav.getByRole("link", { name: "Branches" })).toBeVisible()
 })
 
 test("sign-in rejects a wrong password and accepts the right one", async ({ page }) => {
@@ -71,7 +68,7 @@ test("sign-in rejects a wrong password and accepts the right one", async ({ page
 
 test("an admin builds a branch's location tree", async ({ page }) => {
   await newAdmin(page)
-  await page.getByRole("link", { name: "Branches" }).first().click()
+  await navTo(page, "Branches")
   await page.getByRole("button", { name: "Add branch" }).click()
   const branchDialog = page.getByRole("dialog", { name: "Add branch" })
   await branchDialog.getByLabel("Branch name").fill("Hotel Mumbai")
@@ -106,7 +103,7 @@ test("an invited teammate joins with only the access they were given", async ({ 
   const { orgName } = await newAdmin(page)
   const staffEmail = uniqueEmail("staff")
 
-  await page.getByRole("link", { name: "Users" }).first().click()
+  await navTo(page, "Users")
   await page.getByRole("button", { name: "Invite people" }).click()
   const dialog = page.getByRole("dialog", { name: "Invite people" })
   await dialog.getByLabel("Email").fill(staffEmail)
@@ -131,7 +128,7 @@ test("an invited teammate joins with only the access they were given", async ({ 
   await page.getByRole("button", { name: "Accept invite" }).click()
 
   await expect(page).toHaveURL(/\/dashboard/)
-  const nav = page.getByRole("navigation", { name: "Main" })
+  const nav = await mainNav(page)
   await expect(nav.getByRole("link", { name: "Branches" })).toBeVisible()
   await expect(nav.getByRole("link", { name: "Users" })).toHaveCount(0)
   await expect(nav.getByRole("link", { name: "Audit log" })).toHaveCount(0)
@@ -139,8 +136,7 @@ test("an invited teammate joins with only the access they were given", async ({ 
 
 test("the audit log records actions and verifies its hash chain", async ({ page }) => {
   await newAdmin(page)
-  await page.getByRole("link", { name: "Audit log" }).first().click()
-  await expect(page.getByRole("heading", { name: "Audit log", level: 1 })).toBeVisible()
+  await navTo(page, "Audit log")
   await expect(page.getByText("Chain verified")).toBeVisible()
   for (const action of ["tenant.created", "branch.created", "member.added"]) {
     await expect(page.getByRole("cell", { name: action })).toBeVisible()

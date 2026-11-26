@@ -5,8 +5,24 @@ import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
 import { useSweetAlert, type SweetAlertTone } from "@/components/sweet-alert"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet"
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -104,6 +120,42 @@ export function SweetAlertDemo() {
       <Button variant="destructive" onClick={deleteBranch}>
         Delete branch
       </Button>
+    </div>
+  )
+}
+
+export function ShellPrimitivesDemo() {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Sheet>
+        <SheetTrigger render={<Button variant="outline" />}>
+          <Icon name="sidebar" data-icon="inline-start" /> Open drawer
+        </SheetTrigger>
+        <SheetContent side="right">
+          <SheetHeader>
+            <SheetTitle>Quick details</SheetTitle>
+            <SheetDescription>
+              Slide-over drawers use semantic tokens and zero shadows.
+            </SheetDescription>
+          </SheetHeader>
+        </SheetContent>
+      </Sheet>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="outline" />}>
+          <Icon name="settings" data-icon="inline-start" /> Actions menu
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuLabel>Ticket actions</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem>
+            <Icon name="verify" /> Verify resolution
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive">
+            <Icon name="error" /> Cancel ticket
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }
