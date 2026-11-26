@@ -6,19 +6,19 @@ test.describe("design system page", () => {
   })
 
   test("renders the hero and every section", async ({ page }) => {
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Lime for action")
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Indigo for action")
     for (const name of ["Semantic colours", "Buttons", "Badges", "Alerts", "Cards & forms"]) {
       await expect(page.getByRole("heading", { name, exact: true })).toBeVisible()
     }
   })
 
-  test("primary button uses lime-600 and secondary uses amber-400", async ({ page }) => {
+  test("primary button uses indigo-800 and secondary uses indigo-100", async ({ page }) => {
     const bg = (locator: Locator) =>
       locator.first().evaluate((el) => getComputedStyle(el).backgroundColor)
     const button = (name: string) => page.getByRole("button", { name, exact: true })
     // Compare against the raw palette swatches rendered on the same page.
-    expect(await bg(button("Primary"))).toBe(await bg(page.getByTitle("bg-lime-600")))
-    expect(await bg(button("Secondary"))).toBe(await bg(page.getByTitle("bg-amber-400")))
+    expect(await bg(button("Primary"))).toBe(await bg(page.getByTitle("bg-indigo-800")))
+    expect(await bg(button("Secondary"))).toBe(await bg(page.getByTitle("bg-indigo-100")))
   })
 
   test("colours outside the palette compile to nothing", async ({ page }) => {
@@ -45,7 +45,7 @@ test.describe("design system page", () => {
   })
 
   test("keyboard focus is always visible", async ({ page }) => {
-    // Plain elements get the global 2px outline; shadcn controls swap it for a lime ring (box-shadow).
+    // Plain elements get the global 2px outline; shadcn controls swap it for a indigo ring (box-shadow).
     for (let i = 0; i < 3; i++) {
       await page.keyboard.press("Tab")
       const focus = await page.evaluate(() => {
@@ -59,12 +59,13 @@ test.describe("design system page", () => {
   })
 })
 
-test("home page loads without console errors", async ({ page }) => {
+test("the root goes straight to sign-in without console errors", async ({ page }) => {
   const errors: string[] = []
   page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()))
   // Uncaught exceptions arrive as pageerror, not as console messages.
   page.on("pageerror", (err) => errors.push(err.message))
   const res = await page.goto("/")
   expect(res?.status()).toBe(200)
+  await expect(page).toHaveURL(/\/sign-in$/)
   expect(errors).toEqual([])
 })

@@ -72,7 +72,7 @@ export default async function NotificationsPage() {
               <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
                 <span>{timeAgo(n.createdAt, now)}</span>
                 {n.href && (
-                  <Link href={n.href} className="font-medium text-success hover:underline">
+                  <Link href={n.href} className="font-medium text-primary hover:underline">
                     Open
                   </Link>
                 )}

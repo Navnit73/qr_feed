@@ -13,8 +13,8 @@ export default async function SignUpPage({ searchParams }: PageProps<"/sign-up">
   if (await getCurrentUser()) redirect(target)
   return (
     <>
-      <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
-      <p className="mt-1 mb-6 text-sm text-muted-foreground">
+      <h1 className="text-3xl font-bold tracking-tight">Create your account</h1>
+      <p className="mt-2 mb-8 text-muted-foreground">
         Turn every QR scan into a ticket your team resolves on time.
       </p>
       <SignUpForm next={target} email={typeof email === "string" ? email : undefined} />
@@ -22,7 +22,7 @@ export default async function SignUpPage({ searchParams }: PageProps<"/sign-up">
         Already have an account?{" "}
         <Link
           href={`/sign-in?next=${encodeURIComponent(target)}`}
-          className="font-medium text-success hover:underline"
+          className="font-medium text-primary hover:underline"
         >
           Sign in
         </Link>

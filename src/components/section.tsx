@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
-/** A page section: lime eyebrow, bold heading and muted subtitle, centred above the content. */
+/** A page section: indigo eyebrow, bold heading and muted subtitle, centred above the content. */
 export function Section({
   id,
   eyebrow,
@@ -56,7 +56,7 @@ export function Section({
 
 export function Eyebrow({ children }: { children: ReactNode }) {
   return (
-    <p className="mb-3 inline-flex items-center gap-2 text-xs font-semibold tracking-[0.14em] text-success uppercase sm:mb-4 sm:text-sm">
+    <p className="mb-3 inline-flex items-center gap-2 text-xs font-semibold tracking-[0.14em] text-primary uppercase sm:mb-4 sm:text-sm">
       <span aria-hidden className="h-px w-5 bg-primary" />
       {children}
       <span aria-hidden className="h-px w-5 bg-primary" />

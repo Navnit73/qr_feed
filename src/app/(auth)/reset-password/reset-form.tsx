@@ -24,6 +24,8 @@ export function ResetPasswordForm({ token }: { token: string }) {
           label="New password"
           name="password"
           type="password"
+          icon="lock"
+          revealable
           autoComplete="new-password"
           minLength={10}
           hint="At least 10 characters. Signs you out everywhere else."

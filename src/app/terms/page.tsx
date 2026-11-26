@@ -47,11 +47,11 @@ export default function TermsPage() {
         </section>
         <p className="flex items-center gap-2 border-t pt-6 text-xs">
           <Icon name="qr" className="size-3.5" /> See also:{" "}
-          <Link href="/privacy" className="text-success hover:underline">
+          <Link href="/privacy" className="text-primary hover:underline">
             Privacy Policy
           </Link>{" "}
           ·{" "}
-          <Link href="/dpa" className="text-success hover:underline">
+          <Link href="/dpa" className="text-primary hover:underline">
             Data Processing Addendum
           </Link>
         </p>

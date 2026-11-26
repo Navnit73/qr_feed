@@ -2,7 +2,9 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { EmptyState } from "@/components/cards/empty-state"
 import { PanelCard } from "@/components/cards/panel-card"
+import { ProgressStat } from "@/components/cards/progress-stat"
 import { StatCard } from "@/components/cards/stat-card"
+import type { Tone } from "@/components/cards/tone"
 import { AreaTrend } from "@/components/charts/area-trend"
 import { DonutChart } from "@/components/charts/donut-chart"
 import { Icon, type IconName } from "@/components/icons"
@@ -16,6 +18,7 @@ import { requireTenantContext, requireUser } from "@/server/auth/session"
 import { getDashboard, type Dashboard } from "@/server/modules/dashboard"
 import { can } from "@/server/rbac/ability"
 import { Greeting } from "./greeting"
+import { RefreshButton } from "./refresh-button"
 
 export const metadata: Metadata = { title: "Dashboard · QR Feed" }
 
@@ -37,6 +40,7 @@ export default async function DashboardPage() {
         description={<Greeting name={user.name.split(" ")[0]} org={ws.name} />}
         actions={
           <>
+            <RefreshButton updatedAt={new Date(now).toISOString()} />
             {ws.branches !== null && (
               <Link href="/branches" className={buttonVariants({ variant: "outline", size: "lg" })}>
                 <Icon name="qr" data-icon="inline-start" /> QR codes
@@ -55,6 +59,7 @@ export default async function DashboardPage() {
         {canManage && <SetupChecklist ws={ws} hasReports={!!t?.recent.length} />}
 
         {t ? <TicketKpis t={t} ws={ws} /> : <WorkspaceKpis ws={ws} />}
+        {t && <SeverityShare t={t} />}
 
         {t && (
           <>
@@ -149,10 +154,10 @@ function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard
-        featured
         label="Open tickets"
         value={t.open}
         icon="ticket"
+        tone="indigo"
         footer={
           <p className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
             <span>
@@ -170,6 +175,7 @@ function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
         label="New this week"
         value={t.newThisWeek}
         icon="feedback"
+        tone="emerald"
         delta={t.newThisWeekDelta}
         deltaLabel="vs last week"
         lowerIsBetter
@@ -181,6 +187,7 @@ function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
         label="Average rating"
         value={t.avgRating === null ? "–" : `${t.avgRating} / 5`}
         icon="rating"
+        tone="amber"
         delta={t.avgRatingDelta}
         deltaLabel="vs previous 30 days"
         footer={
@@ -195,6 +202,7 @@ function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
         label="Active QR codes"
         value={ws.qrCodes ?? "–"}
         icon="qr"
+        tone="cyan"
         footer={
           ws.locations !== null && (
             <p className="text-muted-foreground">
@@ -207,20 +215,51 @@ function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
   )
 }
 
+/** How the open tickets split by severity: count, share of the open total and a bar. */
+function SeverityShare({ t }: { t: Tickets }) {
+  const tiles: {
+    severity: Tickets["bySeverity"][number]["severity"]
+    icon: IconName
+    tone: Tone
+  }[] = [
+    { severity: "critical", icon: "warning", tone: "rose" },
+    { severity: "high", icon: "escalate", tone: "orange" },
+    { severity: "medium", icon: "info", tone: "sky" },
+    { severity: "low", icon: "clock", tone: "indigo" },
+  ]
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {tiles.map(({ severity, icon, tone }) => {
+        const count = t.bySeverity.find((b) => b.severity === severity)?.count ?? 0
+        return (
+          <ProgressStat
+            key={severity}
+            label={`${severity[0].toUpperCase()}${severity.slice(1)} severity`}
+            value={count}
+            percent={t.open ? (count / t.open) * 100 : 0}
+            icon={icon}
+            tone={tone}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 /** For viewers without ticket access: what the workspace holds. */
 function WorkspaceKpis({ ws }: { ws: Workspace }) {
-  const tiles: { label: string; value: number | null; icon: IconName }[] = [
-    { label: "Branches", value: ws.branches, icon: "branch" },
-    { label: "Locations", value: ws.locations, icon: "location" },
-    { label: "Active QR codes", value: ws.qrCodes, icon: "qr" },
-    { label: "Team members", value: ws.members, icon: "users" },
+  const tiles: { label: string; value: number | null; icon: IconName; tone: Tone }[] = [
+    { label: "Branches", value: ws.branches, icon: "branch", tone: "indigo" },
+    { label: "Locations", value: ws.locations, icon: "location", tone: "emerald" },
+    { label: "Active QR codes", value: ws.qrCodes, icon: "qr", tone: "cyan" },
+    { label: "Team members", value: ws.members, icon: "users", tone: "rose" },
   ]
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {tiles
         .filter((x) => x.value !== null)
         .map((x) => (
-          <StatCard key={x.label} label={x.label} value={x.value!} icon={x.icon} />
+          <StatCard key={x.label} label={x.label} value={x.value!} icon={x.icon} tone={x.tone} />
         ))}
     </div>
   )
@@ -240,13 +279,13 @@ function RecentTickets({ items, now }: { items: Tickets["recent"]; now: number }
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <Link
                 href={`/tickets/${r.id}`}
-                className="font-medium hover:text-success hover:underline"
+                className="font-medium hover:text-primary hover:underline"
               >
                 {r.category}
               </Link>
               <Link
                 href={`/tickets/${r.id}`}
-                className="font-mono text-xs text-muted-foreground hover:text-success hover:underline"
+                className="font-mono text-xs text-muted-foreground hover:text-primary hover:underline"
               >
                 {r.number}
               </Link>
@@ -296,7 +335,7 @@ function TopLocations({ items }: { items: Tickets["topLocations"] }) {
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-muted">
             <div
-              className={cn("h-full rounded-full", i === 0 ? "bg-secondary" : "bg-primary")}
+              className={cn("h-full rounded-full", i === 0 ? "bg-chart-1" : "bg-primary")}
               style={{ width: `${Math.max(6, (loc.count / max) * 100)}%` }}
             />
           </div>
@@ -372,7 +411,7 @@ function SetupChecklist({ ws, hasReports }: { ws: Workspace; hasReports: boolean
             )}
             <span className={cn("flex-1", s.done && "line-through")}>{s.label}</span>
             {!s.done && (
-              <Link href={s.href} className="font-medium text-success hover:underline">
+              <Link href={s.href} className="font-medium text-primary hover:underline">
                 {s.cta}
               </Link>
             )}

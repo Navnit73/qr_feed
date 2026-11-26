@@ -102,7 +102,7 @@ export default async function AuditsPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <Link
                           href={`/audits/${id}`}
-                          className="font-mono text-xs font-semibold text-success hover:underline"
+                          className="font-mono text-xs font-semibold text-primary hover:underline"
                         >
                           {a.number}
                         </Link>
@@ -144,7 +144,7 @@ export default async function AuditsPage() {
                       </Link>
                       <Link
                         href={`/audits/${id}`}
-                        className="text-xs font-medium text-success hover:underline"
+                        className="text-xs font-medium text-primary hover:underline"
                       >
                         Open →
                       </Link>

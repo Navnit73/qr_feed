@@ -319,7 +319,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
                 <div>
                   <Link
                     href={`/reports?days=${r.rangeDays}${r.branchId ? `&branchId=${r.branchId.toHexString()}` : ""}`}
-                    className="font-medium text-success hover:underline"
+                    className="font-medium text-primary hover:underline"
                   >
                     {r.name}
                   </Link>

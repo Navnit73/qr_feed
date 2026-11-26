@@ -148,7 +148,7 @@ async function Tracking({ params, searchParams }: PageProps<"/t/[token]">) {
                 className={cn(
                   "grid size-7 shrink-0 place-items-center rounded-full border text-xs font-semibold",
                   i < current && "border-success bg-success text-success-foreground",
-                  i === current && "border-primary bg-primary/10 text-success",
+                  i === current && "border-primary bg-primary/10 text-primary",
                   i > current && "text-muted-foreground",
                 )}
               >

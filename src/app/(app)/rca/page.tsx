@@ -97,7 +97,7 @@ export default async function RcaPage({ searchParams }: PageProps<"/rca">) {
                   return (
                     <tr key={id} className="hover:bg-muted/30">
                       <td className="px-4 py-3 font-mono text-xs font-semibold">
-                        <Link href={`/rca/${id}`} className="text-success hover:underline">
+                        <Link href={`/rca/${id}`} className="text-primary hover:underline">
                           {r.number}
                         </Link>
                       </td>

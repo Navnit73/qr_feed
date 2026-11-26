@@ -33,42 +33,78 @@ export const metadata: Metadata = {
 }
 
 const semantic = [
-  { name: "background", bg: "bg-background", fg: "text-foreground", note: "white / black" },
-  { name: "primary", bg: "bg-primary", fg: "text-primary-foreground", note: "lime-600 · CTAs" },
+  { name: "background", bg: "bg-background", fg: "text-foreground", note: "gray-50 / black" },
+  {
+    name: "primary",
+    bg: "bg-primary",
+    fg: "text-primary-foreground",
+    note: "indigo-800 · CTAs, sidebar",
+  },
   {
     name: "primary-hover",
     bg: "bg-primary-hover",
     fg: "text-primary-foreground",
-    note: "lime-700",
+    note: "indigo-900",
   },
   {
     name: "secondary",
     bg: "bg-secondary",
     fg: "text-secondary-foreground",
-    note: "amber-400 · highlights",
+    note: "indigo-100 · soft actions",
   },
   { name: "inverse", bg: "bg-foreground", fg: "text-background", note: "black / white" },
-  { name: "muted", bg: "bg-muted", fg: "text-muted-foreground", note: "gray-100 · quiet surfaces" },
-  { name: "success", bg: "bg-success", fg: "text-success-foreground", note: "lime-700" },
+  { name: "muted", bg: "bg-muted", fg: "text-muted-foreground", note: "gray-200 · quiet surfaces" },
+  { name: "success", bg: "bg-success", fg: "text-success-foreground", note: "emerald-700" },
   { name: "warning", bg: "bg-warning", fg: "text-warning-foreground", note: "orange-600" },
-  { name: "destructive", bg: "bg-destructive", fg: "text-destructive-foreground", note: "red-600" },
+  {
+    name: "destructive",
+    bg: "bg-destructive",
+    fg: "text-destructive-foreground",
+    note: "rose-600",
+  },
   { name: "info", bg: "bg-info", fg: "text-info-foreground", note: "sky-600" },
 ]
 
 // Written out in full so Tailwind can see every class.
 const scales = {
-  lime: [
-    "bg-lime-50",
-    "bg-lime-100",
-    "bg-lime-200",
-    "bg-lime-300",
-    "bg-lime-400",
-    "bg-lime-500",
-    "bg-lime-600",
-    "bg-lime-700",
-    "bg-lime-800",
-    "bg-lime-900",
-    "bg-lime-950",
+  indigo: [
+    "bg-indigo-50",
+    "bg-indigo-100",
+    "bg-indigo-200",
+    "bg-indigo-300",
+    "bg-indigo-400",
+    "bg-indigo-500",
+    "bg-indigo-600",
+    "bg-indigo-700",
+    "bg-indigo-800",
+    "bg-indigo-900",
+    "bg-indigo-950",
+  ],
+  emerald: [
+    "bg-emerald-50",
+    "bg-emerald-100",
+    "bg-emerald-200",
+    "bg-emerald-300",
+    "bg-emerald-400",
+    "bg-emerald-500",
+    "bg-emerald-600",
+    "bg-emerald-700",
+    "bg-emerald-800",
+    "bg-emerald-900",
+    "bg-emerald-950",
+  ],
+  rose: [
+    "bg-rose-50",
+    "bg-rose-100",
+    "bg-rose-200",
+    "bg-rose-300",
+    "bg-rose-400",
+    "bg-rose-500",
+    "bg-rose-600",
+    "bg-rose-700",
+    "bg-rose-800",
+    "bg-rose-900",
+    "bg-rose-950",
   ],
   amber: [
     "bg-amber-50",
@@ -151,17 +187,18 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 export default function DesignPage() {
   return (
     <main className="mx-auto w-full max-w-6xl px-4 sm:px-6">
-      <header className="bg-dots bg-glow relative -mx-4 flex flex-col items-center px-4 pt-16 pb-14 text-center sm:-mx-6 sm:pt-24">
+      <header className="relative -mx-4 flex flex-col items-center px-4 pt-16 pb-14 text-center sm:-mx-6 sm:pt-24">
         <div className="absolute top-4 right-4 sm:right-6">
           <ThemeToggle />
         </div>
         <Eyebrow>Design system</Eyebrow>
         <h1 className="text-[clamp(2.25rem,7vw,4rem)] leading-[1.05] font-bold tracking-tight text-balance">
-          Lime for action, <span className="text-success">amber</span> for attention.
+          Indigo for action, <span className="text-success">emerald</span> for success.
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-pretty text-muted-foreground sm:text-xl">
-          White and black carry the page. Every colour, button and alert below comes from the tokens
-          in <code className="font-mono text-foreground">globals.css</code>.
+          Soft grays carry the page and indigo carries the brand. Every colour, button and alert
+          below comes from the tokens in{" "}
+          <code className="font-mono text-foreground">globals.css</code>.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Button size="xl">
@@ -221,8 +258,8 @@ export default function DesignPage() {
           <p className="max-w-prose text-base leading-relaxed">
             Body · 16 regular. Keep lines under about 70 characters, use{" "}
             <span className="font-semibold">semibold</span> for emphasis and{" "}
-            <a href="#" className="font-medium text-success underline-offset-4 hover:underline">
-              lime-700 for links
+            <a href="#" className="font-medium text-primary underline-offset-4 hover:underline">
+              indigo-800 for links
             </a>
             .
           </p>
@@ -494,7 +531,7 @@ export default function DesignPage() {
             </CardFooter>
           </Card>
 
-          <div className="edge-lime rounded-2xl p-px">
+          <div className="edge-primary rounded-2xl p-px">
             <div className="bg-glow-amber flex h-full flex-col rounded-[calc(1rem-1px)] bg-card p-6">
               <Badge variant="secondary">Featured</Badge>
               <p className="mt-4 text-4xl font-bold tracking-tight tabular-nums">12,480</p>
@@ -512,7 +549,7 @@ export default function DesignPage() {
         <div className="grid gap-3 sm:grid-cols-3">
           {[
             ["bg-dots", "Dot grid"],
-            ["bg-glow", "Lime glow"],
+            ["bg-glow", "Indigo glow"],
             ["bg-glow-amber", "Amber glow"],
           ].map(([cls, label]) => (
             <div key={cls} className={`${cls} flex h-32 items-end rounded-xl border p-3`}>

@@ -98,19 +98,19 @@ export function AppShellFrame({
       <div
         className={cn(
           "min-h-dvh transition-[padding] duration-200",
-          collapsed ? "lg:pl-18" : "lg:pl-64",
+          collapsed ? "lg:pl-18" : "lg:pl-60",
         )}
       >
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-40 hidden border-r bg-sidebar text-sidebar-foreground transition-[width] duration-200 lg:block",
-            collapsed ? "w-18" : "w-64",
+            "fixed inset-y-0 left-0 z-40 hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 lg:block",
+            collapsed ? "w-18" : "w-60",
           )}
         >
           {sidebar}
         </aside>
         {header}
-        <main className="mx-auto w-full max-w-7xl px-4 pt-6 pb-16 sm:px-6 lg:px-8 lg:pt-8">
+        <main className="mx-auto w-full max-w-[88rem] px-4 pt-6 pb-16 sm:px-6 lg:px-8 lg:pt-8">
           {children}
         </main>
       </div>
@@ -171,41 +171,40 @@ export function SidebarBody({
     <div className="flex h-full flex-col">
       <div
         className={cn(
-          "flex h-16 shrink-0 items-center border-b border-sidebar-border",
-          collapsed ? "justify-center px-2" : "px-5",
+          "flex h-16 shrink-0 items-center gap-3 border-b border-sidebar-border",
+          collapsed ? "justify-center px-2" : "px-4",
         )}
+        title={collapsed ? data.orgName : undefined}
       >
-        <Brand compact={collapsed} />
-      </div>
-
-      {!collapsed && (
-        <div className="mx-3 mt-4 mb-4 rounded-xl border bg-card px-3 py-2.5">
-          <div className="flex items-center justify-between gap-2">
+        <span
+          aria-hidden
+          className="grid size-10 shrink-0 place-items-center rounded-full bg-sidebar-accent text-sm font-bold ring-2 ring-sidebar-foreground/25"
+        >
+          {initials(data.orgName) || <Icon name="branch" />}
+        </span>
+        {!collapsed && (
+          <div className="min-w-0">
             <p className="truncate text-sm font-semibold" title={data.orgName}>
               {data.orgName}
             </p>
-            <Badge
-              variant={data.plan === "trial" ? "secondary" : "muted"}
-              className="shrink-0 capitalize"
-            >
-              {data.plan}
-            </Badge>
+            <p className="truncate text-xs text-sidebar-foreground/65 capitalize">
+              {data.plan} · {data.industry}
+            </p>
           </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground capitalize">
-            {data.industry} workspace
-          </p>
-        </div>
-      )}
+        )}
+      </div>
 
-      <div className={cn("min-h-0 flex-1 overflow-y-auto pb-4", collapsed ? "px-2 pt-3" : "px-3")}>
+      <div className="h-3 shrink-0" />
+
+      <div className={cn("min-h-0 flex-1 overflow-y-auto pb-4", collapsed ? "px-2" : "px-3")}>
         <AppNav items={data.nav} collapsed={collapsed} onNavigate={onNavigate} />
       </div>
 
       {!collapsed && data.usage.length > 0 && (
-        <div className="m-3 rounded-xl border bg-card p-3">
+        <div className="m-3 rounded-xl bg-sidebar-accent p-3">
           <p className="mb-2.5 flex items-center justify-between text-xs font-semibold">
             <span className="capitalize">{data.plan} usage</span>
-            <Link href="/settings" className="font-medium text-success hover:underline">
+            <Link href="/settings" className="font-medium underline-offset-2 hover:underline">
               Manage
             </Link>
           </p>
@@ -215,20 +214,23 @@ export function SidebarBody({
               return (
                 <li key={u.label}>
                   <div className="mb-1 flex justify-between text-xs">
-                    <span className="text-muted-foreground">{u.label}</span>
+                    <span className="text-sidebar-foreground/70">{u.label}</span>
                     <span className="font-medium tabular-nums">
                       {u.used}/{u.limit}
                     </span>
                   </div>
                   <div
-                    className="h-1.5 overflow-hidden rounded-full bg-muted"
+                    className="h-1.5 overflow-hidden rounded-full bg-sidebar-foreground/20"
                     role="progressbar"
                     aria-label={`${u.label} used`}
                     aria-valuenow={u.used}
                     aria-valuemax={u.limit}
                   >
                     <div
-                      className={cn("h-full rounded-full", pct >= 90 ? "bg-warning" : "bg-primary")}
+                      className={cn(
+                        "h-full rounded-full",
+                        pct >= 90 ? "bg-warning" : "bg-sidebar-primary",
+                      )}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -254,7 +256,10 @@ export function MobileNav({ data }: { data: ShellData }) {
       >
         <MenuGlyph />
       </SheetTrigger>
-      <SheetContent side="left" className="w-72 gap-0 bg-background p-0 sm:max-w-72">
+      <SheetContent
+        side="left"
+        className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground sm:max-w-72"
+      >
         <SheetTitle className="sr-only">Menu</SheetTitle>
         <SidebarBody data={data} forceExpanded onNavigate={() => setOpen(false)} />
       </SheetContent>
@@ -293,14 +298,14 @@ export function BranchSwitcher({ branches }: { branches: ShellData["branches"] }
       <DropdownMenuTrigger
         render={
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             aria-label="Switch branch"
-            className="hidden h-9 max-w-44 gap-2 md:inline-flex"
+            className="hidden h-9 max-w-44 gap-2 font-semibold text-primary md:inline-flex"
           />
         }
       >
-        <Icon name="branch" className="size-3.5 text-muted-foreground" />
+        <Icon name="branch" className="size-3.5" />
         <span className="truncate">
           {branches.length === 1 ? branches[0].name : `${branches.length} branches`}
         </span>
@@ -542,7 +547,7 @@ export function NotificationBell({
               <button
                 type="button"
                 onClick={markAllRead}
-                className="text-xs font-medium text-success hover:underline"
+                className="text-xs font-medium text-primary hover:underline"
               >
                 Mark all read
               </button>
@@ -570,7 +575,7 @@ export function NotificationBell({
           )}
           <DropdownMenuSeparator />
           <DropdownMenuItem
-            className="min-h-9 justify-center text-xs font-medium text-success"
+            className="min-h-9 justify-center text-xs font-medium text-primary"
             onClick={() => router.push("/notifications")}
           >
             View all notifications
@@ -610,7 +615,7 @@ export function UserMenu({ user }: { user: ShellData["user"] }) {
         }
       >
         <Avatar>
-          <AvatarFallback className="bg-foreground text-xs font-semibold text-background">
+          <AvatarFallback className="bg-primary text-xs font-semibold text-primary-foreground">
             {initials(user.name) || <Icon name="user" />}
           </AvatarFallback>
         </Avatar>

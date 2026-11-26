@@ -8,8 +8,8 @@ import { AuthForm } from "../auth-form"
 export default function ForgotPasswordPage() {
   return (
     <>
-      <h1 className="text-2xl font-bold tracking-tight">Reset your password</h1>
-      <p className="mt-1 mb-6 text-sm text-muted-foreground">
+      <h1 className="text-3xl font-bold tracking-tight">Reset your password</h1>
+      <p className="mt-2 mb-8 text-muted-foreground">
         We&apos;ll email you a link to choose a new one.
       </p>
       <AuthForm
@@ -28,6 +28,8 @@ export default function ForgotPasswordPage() {
             label="Email"
             name="email"
             type="email"
+            icon="mail"
+            placeholder="you@company.com"
             autoComplete="email"
             required
             state={state}
@@ -35,7 +37,7 @@ export default function ForgotPasswordPage() {
         )}
       </AuthForm>
       <p className="mt-6 text-center text-sm">
-        <Link href="/sign-in" className="font-medium text-success hover:underline">
+        <Link href="/sign-in" className="font-medium text-primary hover:underline">
           Back to sign in
         </Link>
       </p>

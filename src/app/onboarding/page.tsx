@@ -25,7 +25,7 @@ async function Onboarding({ searchParams }: PageProps<"/onboarding">) {
   if (!creatingAnother && (await getTenantContext())) redirect("/dashboard")
 
   return (
-    <main className="bg-dots bg-glow flex min-h-dvh flex-col items-center px-4 py-10 sm:py-16">
+    <main className="flex min-h-dvh flex-col items-center px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg">
         <div className="mb-6 text-center">
           <Eyebrow>Step 2 of 2</Eyebrow>

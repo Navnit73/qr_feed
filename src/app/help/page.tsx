@@ -77,7 +77,7 @@ export default function HelpPage() {
           <PanelCard
             key={g.title}
             title={g.title}
-            action={<Icon name={g.icon} className="size-5 text-success" />}
+            action={<Icon name={g.icon} className="size-5 text-primary" />}
           >
             <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
               {g.steps.map((s) => (

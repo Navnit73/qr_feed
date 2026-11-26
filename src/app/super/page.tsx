@@ -40,7 +40,7 @@ async function TenantsConsole() {
         actions={
           <Link
             href="/dashboard"
-            className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-success hover:underline"
+            className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary hover:underline"
           >
             <Icon name="dashboard" /> Back to app
           </Link>

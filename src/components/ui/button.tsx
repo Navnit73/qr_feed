@@ -21,7 +21,7 @@ const buttonStyles = cva(
           "bg-warning text-warning-foreground hover:bg-warning/90 focus-visible:ring-warning/30",
         destructive:
           "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
-        link: "text-success underline-offset-4 hover:underline",
+        link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
         default:

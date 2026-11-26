@@ -5,7 +5,6 @@ import {
   BranchSwitcher,
   Brand,
   CommandSearch,
-  HeaderTitle,
   MobileNav,
   NotificationBell,
   SidebarBody,
@@ -37,15 +36,12 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
       }
       header={
         <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
-          <div className="mx-auto flex h-16 max-w-7xl items-center gap-2 px-4 sm:px-6 lg:px-8">
+          <div className="flex h-16 items-center gap-2 px-4 sm:px-6 lg:px-8">
             <Suspense fallback={<Skeleton className="size-11 lg:hidden" />}>
               <MobileMenu />
             </Suspense>
             <SidebarCollapseButton />
-            <Brand className="mr-2 lg:hidden" labelClassName="hidden sm:inline" />
-            <Suspense fallback={null}>
-              <SectionTitle />
-            </Suspense>
+            <Brand className="mr-2" labelClassName="hidden text-primary sm:inline" />
             <div className="ml-auto flex items-center gap-1.5">
               <Suspense fallback={null}>
                 <HeaderTools />
@@ -172,10 +168,6 @@ async function Sidebar() {
 
 async function MobileMenu() {
   return <MobileNav data={await getShellData()} />
-}
-
-async function SectionTitle() {
-  return <HeaderTitle nav={(await getShellData()).nav} />
 }
 
 async function HeaderTools() {

@@ -18,7 +18,7 @@ export const metadata: Metadata = { title: "Accept invite · QR Feed", robots: {
 
 export default function InvitePage({ params }: PageProps<"/invite/[token]">) {
   return (
-    <main className="bg-dots bg-glow flex min-h-dvh flex-col items-center px-4 py-10 sm:py-16">
+    <main className="flex min-h-dvh flex-col items-center px-4 py-10 sm:py-16">
       <div className="w-full max-w-sm rounded-2xl border bg-card p-6 sm:p-8">
         <Suspense fallback={<Skeleton className="h-64" />}>
           <Invite params={params} />
@@ -59,7 +59,7 @@ async function InviteBody({
 
   return (
     <>
-      <span className="mb-4 grid size-12 place-items-center rounded-full bg-primary/10 text-success">
+      <span className="mb-4 grid size-12 place-items-center rounded-full bg-primary/10 text-primary">
         <Icon name="users" className="size-6" />
       </span>
       <h1 className="text-2xl font-bold tracking-tight text-balance">Join {tenant.name}</h1>

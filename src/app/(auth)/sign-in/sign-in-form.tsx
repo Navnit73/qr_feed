@@ -1,6 +1,7 @@
 "use client"
 
 import { useRouter } from "next/navigation"
+import Link from "next/link"
 import { FormField } from "@/components/form"
 import { authClient } from "@/lib/auth-client"
 import { AuthForm } from "../auth-form"
@@ -27,6 +28,8 @@ export function SignInForm({ next }: { next: string }) {
             label="Email"
             name="email"
             type="email"
+            icon="mail"
+            placeholder="you@company.com"
             autoComplete="email"
             required
             state={state}
@@ -35,6 +38,17 @@ export function SignInForm({ next }: { next: string }) {
             label="Password"
             name="password"
             type="password"
+            icon="lock"
+            revealable
+            placeholder="Your password"
+            labelAction={
+              <Link
+                href="/forgot-password"
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                Forgot password?
+              </Link>
+            }
             autoComplete="current-password"
             required
             state={state}

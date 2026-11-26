@@ -7,7 +7,7 @@
 /*
  * QR Feed design system. Rules are in CLAUDE.md; the live reference is /design.
  *
- * 1. Restricted palette. Only the colours below exist, so off-brand classes like
+ * 1. Restricted palette (indigo brand, emerald/rose/amber/cyan accents). Only the colours below exist, so off-brand classes like
  *    bg-blue-500 produce nothing. Use the semantic tokens (bg-primary, text-warning …)
  *    first, and raw shades only for one-off decoration.
  * 2. No shadows. Depth comes from borders, tints and backdrop blur.
@@ -30,18 +30,6 @@
   --color-gray-800: oklch(26.9% 0 0);
   --color-gray-900: oklch(20.5% 0 0);
   --color-gray-950: oklch(14.5% 0 0);
-
-  --color-lime-50: oklch(98.6% 0.031 120.757);
-  --color-lime-100: oklch(96.7% 0.067 122.328);
-  --color-lime-200: oklch(93.8% 0.127 124.321);
-  --color-lime-300: oklch(89.7% 0.196 126.665);
-  --color-lime-400: oklch(84.1% 0.238 128.85);
-  --color-lime-500: oklch(76.8% 0.233 130.85);
-  --color-lime-600: oklch(64.8% 0.2 131.684);
-  --color-lime-700: oklch(53.2% 0.157 131.589);
-  --color-lime-800: oklch(45.3% 0.124 130.933);
-  --color-lime-900: oklch(40.5% 0.101 131.063);
-  --color-lime-950: oklch(27.4% 0.072 132.109);
 
   --color-amber-50: oklch(98.7% 0.022 95.277);
   --color-amber-100: oklch(96.2% 0.059 95.617);
@@ -90,6 +78,54 @@
   --color-sky-800: oklch(44.3% 0.11 240.79);
   --color-sky-900: oklch(39.1% 0.09 240.876);
   --color-sky-950: oklch(29.3% 0.066 243.157);
+
+  --color-indigo-50: oklch(96.2% 0.018 272.314);
+  --color-indigo-100: oklch(93% 0.034 272.788);
+  --color-indigo-200: oklch(87% 0.065 274.039);
+  --color-indigo-300: oklch(78.5% 0.115 274.713);
+  --color-indigo-400: oklch(67.3% 0.182 276.935);
+  --color-indigo-500: oklch(58.5% 0.233 277.117);
+  --color-indigo-600: oklch(51.1% 0.262 276.966);
+  --color-indigo-700: oklch(45.7% 0.24 277.023);
+  --color-indigo-800: oklch(39.8% 0.195 277.366);
+  --color-indigo-900: oklch(35.9% 0.144 278.697);
+  --color-indigo-950: oklch(25.7% 0.09 281.288);
+
+  --color-emerald-50: oklch(97.9% 0.021 166.113);
+  --color-emerald-100: oklch(95% 0.052 163.051);
+  --color-emerald-200: oklch(90.5% 0.093 164.15);
+  --color-emerald-300: oklch(84.5% 0.143 164.978);
+  --color-emerald-400: oklch(76.5% 0.177 163.223);
+  --color-emerald-500: oklch(69.6% 0.17 162.48);
+  --color-emerald-600: oklch(59.6% 0.145 163.225);
+  --color-emerald-700: oklch(50.8% 0.118 165.612);
+  --color-emerald-800: oklch(43.2% 0.095 166.913);
+  --color-emerald-900: oklch(37.8% 0.077 168.94);
+  --color-emerald-950: oklch(26.2% 0.051 172.552);
+
+  --color-cyan-50: oklch(98.4% 0.019 200.873);
+  --color-cyan-100: oklch(95.6% 0.045 203.388);
+  --color-cyan-200: oklch(91.7% 0.08 205.041);
+  --color-cyan-300: oklch(86.5% 0.127 207.078);
+  --color-cyan-400: oklch(78.9% 0.154 211.53);
+  --color-cyan-500: oklch(71.5% 0.143 215.221);
+  --color-cyan-600: oklch(60.9% 0.126 221.723);
+  --color-cyan-700: oklch(52% 0.105 223.128);
+  --color-cyan-800: oklch(45% 0.085 224.283);
+  --color-cyan-900: oklch(39.8% 0.07 227.392);
+  --color-cyan-950: oklch(30.2% 0.056 229.695);
+
+  --color-rose-50: oklch(96.9% 0.015 12.422);
+  --color-rose-100: oklch(94.1% 0.03 12.58);
+  --color-rose-200: oklch(89.2% 0.058 10.001);
+  --color-rose-300: oklch(81% 0.117 11.638);
+  --color-rose-400: oklch(71.2% 0.194 13.428);
+  --color-rose-500: oklch(64.5% 0.246 16.439);
+  --color-rose-600: oklch(58.6% 0.253 17.585);
+  --color-rose-700: oklch(51.4% 0.222 16.935);
+  --color-rose-800: oklch(45.5% 0.188 13.697);
+  --color-rose-900: oklch(41% 0.159 10.272);
+  --color-rose-950: oklch(27.1% 0.105 12.094);
 
   --shadow-*: initial;
   --inset-shadow-*: initial;
@@ -168,58 +204,58 @@
   }
 }
 
-/* Light: white page, black type, lime actions, amber highlights. */
+/* Light: soft gray page, slightly deeper gray cards, indigo actions and sidebar. */
 :root {
   --radius: 0.625rem;
 
-  --background: var(--color-white);
-  --foreground: var(--color-black);
-  --card: var(--color-white);
-  --card-foreground: var(--color-black);
+  --background: var(--color-gray-50);
+  --foreground: var(--color-gray-950);
+  --card: var(--color-gray-100);
+  --card-foreground: var(--color-gray-950);
   --popover: var(--color-white);
-  --popover-foreground: var(--color-black);
+  --popover-foreground: var(--color-gray-950);
 
-  --primary: var(--color-lime-600);
-  --primary-hover: var(--color-lime-700);
+  --primary: var(--color-indigo-800);
+  --primary-hover: var(--color-indigo-900);
   --primary-foreground: var(--color-white);
-  --secondary: var(--color-amber-400);
-  --secondary-hover: var(--color-amber-500);
-  --secondary-foreground: var(--color-black);
-  --muted: var(--color-gray-100);
-  --muted-foreground: var(--color-gray-500);
-  --accent: var(--color-gray-100);
-  --accent-foreground: var(--color-black);
+  --secondary: var(--color-indigo-100);
+  --secondary-hover: var(--color-indigo-200);
+  --secondary-foreground: var(--color-indigo-800);
+  --muted: var(--color-gray-200);
+  --muted-foreground: var(--color-gray-600);
+  --accent: var(--color-indigo-50);
+  --accent-foreground: var(--color-indigo-950);
 
-  --success: var(--color-lime-700);
+  --success: var(--color-emerald-700);
   --success-foreground: var(--color-white);
   --warning: var(--color-orange-600);
   --warning-foreground: var(--color-white);
-  --destructive: var(--color-red-600);
+  --destructive: var(--color-rose-600);
   --destructive-foreground: var(--color-white);
   --info: var(--color-sky-600);
   --info-foreground: var(--color-white);
 
   --border: var(--color-gray-200);
-  --input: var(--color-gray-200);
-  --ring: var(--color-lime-600);
+  --input: var(--color-gray-300);
+  --ring: var(--color-indigo-600);
 
-  --chart-1: var(--color-lime-600);
-  --chart-2: var(--color-amber-400);
-  --chart-3: var(--color-lime-800);
-  --chart-4: var(--color-amber-600);
+  --chart-1: var(--color-rose-600);
+  --chart-2: var(--color-indigo-700);
+  --chart-3: var(--color-emerald-500);
+  --chart-4: var(--color-amber-500);
   --chart-5: var(--color-gray-400);
 
-  --sidebar: var(--color-gray-50);
-  --sidebar-foreground: var(--color-black);
-  --sidebar-primary: var(--color-lime-600);
-  --sidebar-primary-foreground: var(--color-white);
-  --sidebar-accent: var(--color-gray-100);
-  --sidebar-accent-foreground: var(--color-black);
-  --sidebar-border: var(--color-gray-200);
-  --sidebar-ring: var(--color-lime-600);
+  --sidebar: var(--color-indigo-800);
+  --sidebar-foreground: var(--color-white);
+  --sidebar-primary: var(--color-white);
+  --sidebar-primary-foreground: var(--color-indigo-800);
+  --sidebar-accent: oklch(100% 0 0 / 14%);
+  --sidebar-accent-foreground: var(--color-white);
+  --sidebar-border: oklch(100% 0 0 / 14%);
+  --sidebar-ring: var(--color-indigo-200);
 }
 
-/* Dark: black page, white type. Lime and amber stay recognisably the same. */
+/* Dark: black page, white type. Indigo lifts a step so it still reads on black. */
 .dark {
   --background: var(--color-black);
   --foreground: var(--color-white);
@@ -228,44 +264,44 @@
   --popover: var(--color-gray-950);
   --popover-foreground: var(--color-white);
 
-  --primary: var(--color-lime-600);
-  --primary-hover: var(--color-lime-500);
+  --primary: var(--color-indigo-500);
+  --primary-hover: var(--color-indigo-400);
   --primary-foreground: var(--color-white);
-  --secondary: var(--color-amber-400);
-  --secondary-hover: var(--color-amber-300);
-  --secondary-foreground: var(--color-black);
+  --secondary: var(--color-indigo-950);
+  --secondary-hover: var(--color-indigo-900);
+  --secondary-foreground: var(--color-indigo-200);
   --muted: var(--color-gray-900);
   --muted-foreground: var(--color-gray-400);
-  --accent: var(--color-gray-900);
+  --accent: var(--color-indigo-950);
   --accent-foreground: var(--color-white);
 
-  --success: var(--color-lime-500);
+  --success: var(--color-emerald-500);
   --success-foreground: var(--color-black);
   --warning: var(--color-orange-500);
   --warning-foreground: var(--color-black);
-  --destructive: var(--color-red-500);
+  --destructive: var(--color-rose-500);
   --destructive-foreground: var(--color-white);
   --info: var(--color-sky-500);
   --info-foreground: var(--color-black);
 
   --border: oklch(100% 0 0 / 12%);
   --input: oklch(100% 0 0 / 16%);
-  --ring: var(--color-lime-500);
+  --ring: var(--color-indigo-400);
 
-  --chart-1: var(--color-lime-500);
-  --chart-2: var(--color-amber-400);
-  --chart-3: var(--color-lime-300);
-  --chart-4: var(--color-amber-600);
+  --chart-1: var(--color-rose-500);
+  --chart-2: var(--color-indigo-400);
+  --chart-3: var(--color-emerald-400);
+  --chart-4: var(--color-amber-400);
   --chart-5: var(--color-gray-500);
 
-  --sidebar: var(--color-gray-950);
+  --sidebar: var(--color-indigo-950);
   --sidebar-foreground: var(--color-white);
-  --sidebar-primary: var(--color-lime-600);
-  --sidebar-primary-foreground: var(--color-white);
-  --sidebar-accent: var(--color-gray-900);
+  --sidebar-primary: var(--color-white);
+  --sidebar-primary-foreground: var(--color-indigo-950);
+  --sidebar-accent: oklch(100% 0 0 / 12%);
   --sidebar-accent-foreground: var(--color-white);
   --sidebar-border: oklch(100% 0 0 / 12%);
-  --sidebar-ring: var(--color-lime-500);
+  --sidebar-ring: var(--color-indigo-300);
 }
 
 @layer base {
@@ -309,11 +345,11 @@
     background-size: 22px 22px;
   }
 
-  /* Soft lime light behind a hero. Pure colour, no shadow. */
+  /* Soft indigo light behind a hero. Pure colour, no shadow. */
   .bg-glow {
     background-image: radial-gradient(
       60% 55% at 50% 0%,
-      color-mix(in oklch, var(--color-lime-600) 16%, transparent),
+      color-mix(in oklch, var(--color-indigo-600) 14%, transparent),
       transparent 70%
     );
   }
@@ -327,11 +363,11 @@
     );
   }
 
-  /* Thin lime-to-border edge for a featured card: wrap the card in this with p-px. */
-  .edge-lime {
+  /* Thin indigo-to-border edge for a featured card: wrap the card in this with p-px. */
+  .edge-primary {
     background: linear-gradient(
       160deg,
-      color-mix(in oklch, var(--color-lime-600) 55%, transparent),
+      color-mix(in oklch, var(--color-indigo-600) 55%, transparent),
       var(--border) 45%,
       var(--border)
     );

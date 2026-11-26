@@ -73,7 +73,7 @@ export default async function MyWorkPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Link
                       href={`/tickets/${id}`}
-                      className="font-mono text-xs font-semibold text-success hover:underline"
+                      className="font-mono text-xs font-semibold text-primary hover:underline"
                     >
                       {t.number}
                     </Link>

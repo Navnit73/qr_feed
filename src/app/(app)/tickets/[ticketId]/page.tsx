@@ -357,7 +357,7 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
             ) : (
               <p className="text-sm text-muted-foreground">
                 No SLA policy attached. Configure policies in{" "}
-                <Link href="/settings" className="text-success hover:underline">
+                <Link href="/settings" className="text-primary hover:underline">
                   Settings → SLA
                 </Link>
                 .

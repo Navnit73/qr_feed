@@ -57,7 +57,7 @@ export default async function VerificationsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Link
                       href={`/tickets/${id}`}
-                      className="font-mono text-sm font-semibold text-success hover:underline"
+                      className="font-mono text-sm font-semibold text-primary hover:underline"
                     >
                       {t.number}
                     </Link>

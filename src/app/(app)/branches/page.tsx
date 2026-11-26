@@ -41,7 +41,7 @@ export default async function BranchesPage() {
               >
                 <span className="flex items-center justify-between gap-2">
                   <span className="font-semibold">{b.name}</span>
-                  <Icon name="branch" className="text-muted-foreground group-hover:text-success" />
+                  <Icon name="branch" className="text-muted-foreground group-hover:text-primary" />
                 </span>
                 <span className="mt-1 text-sm text-muted-foreground">
                   {b.timezone.replaceAll("_", " ")}

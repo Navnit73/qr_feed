@@ -1,8 +1,8 @@
 "use client"
 
-import { useId, type ComponentProps, type ReactNode } from "react"
+import { useId, useState, type ComponentProps, type ReactNode } from "react"
 import { useFormStatus } from "react-dom"
-import { Icon } from "@/components/icons"
+import { Icon, type IconName } from "@/components/icons"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,29 +32,74 @@ function Help({ id, error, hint }: { id: string; error?: string; hint?: ReactNod
   ) : null
 }
 
-/** Label + input + error/hint, wired for screen readers. Inputs are 44px tall (touch). */
+/**
+ * Label + input + error/hint, wired for screen readers. Inputs are 44px tall (touch).
+ * Optional extras for sign-in style forms: a leading `icon`, a show/hide toggle for passwords
+ * (`revealable`) and a `labelAction` link on the label row (e.g. "Forgot password?").
+ */
 export function FormField({
   label,
   name,
   state,
   hint,
+  icon,
+  revealable = false,
+  labelAction,
   className,
+  type,
   ...input
-}: { label: string; name: string; state: State; hint?: ReactNode } & ComponentProps<"input">) {
+}: {
+  label: string
+  name: string
+  state: State
+  hint?: ReactNode
+  icon?: IconName
+  revealable?: boolean
+  labelAction?: ReactNode
+} & ComponentProps<"input">) {
   const id = useId()
+  const [shown, setShown] = useState(false)
   const error = errorFor(state, name)
   const helpId = `${id}-help`
+  const reveal = revealable && type === "password"
   return (
     <div className={cn("space-y-2", className)}>
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        name={name}
-        className="h-11 md:h-10"
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error || hint ? helpId : undefined}
-        {...input}
-      />
+      {labelAction ? (
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor={id}>{label}</Label>
+          {labelAction}
+        </div>
+      ) : (
+        <Label htmlFor={id}>{label}</Label>
+      )}
+      <div className="relative">
+        {icon && (
+          <Icon
+            name={icon}
+            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+        )}
+        <Input
+          id={id}
+          name={name}
+          type={reveal && shown ? "text" : type}
+          className={cn("h-11 md:h-10", icon && "pl-9.5", reveal && "pr-11")}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error || hint ? helpId : undefined}
+          {...input}
+        />
+        {reveal && (
+          <button
+            type="button"
+            onClick={() => setShown((v) => !v)}
+            aria-label={shown ? "Hide password" : "Show password"}
+            aria-pressed={shown}
+            className="absolute top-1/2 right-1 grid size-9 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <Icon name={shown ? "eyeOff" : "eye"} />
+          </button>
+        )}
+      </div>
       <Help id={helpId} error={error} hint={hint} />
     </div>
   )

@@ -32,7 +32,7 @@ export function BrandingForm({
         name="primaryColor"
         defaultValue={initial.primaryColor ?? ""}
         placeholder="#65a30d"
-        hint="Leave blank to use QR Feed's default lime accent."
+        hint="Leave blank to use QR Feed's default indigo accent."
         state={state}
       />
       <FormField

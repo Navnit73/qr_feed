@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 export function ThemeToggle() {
   return (
     <Button
-      variant="outline"
+      variant="ghost"
       size="icon-xl"
       aria-label="Toggle dark mode"
       onClick={() => document.documentElement.classList.toggle("dark")}

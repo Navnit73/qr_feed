@@ -58,15 +58,15 @@ test.describe("component kit on /design", () => {
   test("charts draw SVG in the brand colours", async ({ page }) => {
     const figure = page.getByRole("figure", { name: "Tickets this week" })
     await expect(figure.locator("svg.recharts-surface").first()).toBeVisible()
-    // The first series uses --chart-1, which is lime-600 in light mode, like the swatch.
+    // The first series uses --chart-1, which is rose-600 in light mode, like the swatch.
     const stroke = await figure
       .locator(".recharts-area-curve")
       .first()
       .evaluate((el) => getComputedStyle(el).stroke)
-    const lime = await page
-      .getByTitle("bg-lime-600")
+    const rose = await page
+      .getByTitle("bg-rose-600")
       .evaluate((el) => getComputedStyle(el).backgroundColor)
-    expect(stroke).toBe(lime)
+    expect(stroke).toBe(rose)
   })
 })
 

@@ -35,11 +35,11 @@ export function AppNav({
   const groups = [...new Set(items.map((i) => i.group))]
 
   return (
-    <nav aria-label="Main" className="flex flex-col gap-5">
+    <nav aria-label="Main" className="flex flex-col gap-4">
       {groups.map((group) => (
         <div key={group}>
           {!collapsed && (
-            <p className="mb-1.5 px-3 text-[0.7rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+            <p className="mb-1 px-3 text-[0.68rem] font-semibold tracking-[0.14em] text-sidebar-foreground/55 uppercase">
               {group}
             </p>
           )}
@@ -56,16 +56,19 @@ export function AppNav({
                       title={collapsed ? item.label : undefined}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:min-h-10",
+                        "relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-sidebar-foreground/85 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground lg:min-h-9.5",
                         collapsed && "justify-center px-0",
                         active &&
-                          "bg-primary/10 text-foreground before:absolute before:inset-y-2 before:left-0 before:w-1 before:rounded-full before:bg-primary hover:bg-primary/15",
+                          "bg-sidebar-accent font-semibold text-sidebar-foreground before:absolute before:inset-y-2 before:left-0 before:w-1 before:rounded-full before:bg-sidebar-primary",
                       )}
                     >
-                      <Icon name={item.icon} className={cn("size-4.5", active && "text-success")} />
+                      <Icon name={item.icon} className="size-4.5" />
                       {!collapsed && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
                       {!collapsed && !!item.badge && item.badge > 0 && (
-                        <Badge variant="secondary" className="px-1.5 text-[11px] tabular-nums">
+                        <Badge
+                          variant="inverse"
+                          className="bg-sidebar-primary px-1.5 text-[11px] text-sidebar-primary-foreground tabular-nums"
+                        >
                           {item.badge > 99 ? "99+" : item.badge}
                         </Badge>
                       )}

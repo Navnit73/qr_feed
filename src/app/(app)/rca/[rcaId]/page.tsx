@@ -78,7 +78,7 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
           <Link
             key={t._id.toHexString()}
             href={`/tickets/${t._id.toHexString()}`}
-            className="rounded-full border px-3 py-1 font-mono text-xs text-success hover:bg-primary/5"
+            className="rounded-full border px-3 py-1 font-mono text-xs text-primary hover:bg-primary/5"
           >
             Linked: {t.number}
           </Link>

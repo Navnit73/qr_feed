@@ -1,6 +1,8 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { redirect } from "next/navigation"
+import { Icon } from "@/components/icons"
+import { buttonVariants } from "@/components/ui/button"
 import { safeNext } from "@/lib/safe-next"
 import { getCurrentUser } from "@/server/auth/session"
 import { SignInForm } from "./sign-in-form"
@@ -13,25 +15,22 @@ export default async function SignInPage({ searchParams }: PageProps<"/sign-in">
   if (await getCurrentUser()) redirect(target)
   return (
     <>
-      <h1 className="text-2xl font-bold tracking-tight">Sign in</h1>
-      <p className="mt-1 mb-6 text-sm text-muted-foreground">Welcome back to QR Feed.</p>
+      <h1 className="text-3xl font-bold tracking-tight">Welcome back</h1>
+      <p className="mt-2 mb-8 text-muted-foreground">
+        Sign in to manage tickets, audits and QR codes for your locations.
+      </p>
       <SignInForm next={target} />
-      <div className="mt-6 space-y-2 text-center text-sm">
-        <p>
-          <Link href="/forgot-password" className="font-medium text-success hover:underline">
-            Forgot your password?
-          </Link>
-        </p>
-        <p className="text-muted-foreground">
-          New here?{" "}
-          <Link
-            href={`/sign-up?next=${encodeURIComponent(target)}`}
-            className="font-medium text-success hover:underline"
-          >
-            Create an account
-          </Link>
-        </p>
+      <div className="my-6 flex items-center gap-3 text-xs text-muted-foreground">
+        <span className="h-px flex-1 bg-border" />
+        New to QR Feed?
+        <span className="h-px flex-1 bg-border" />
       </div>
+      <Link
+        href={`/sign-up?next=${encodeURIComponent(target)}`}
+        className={buttonVariants({ variant: "outline", size: "xl", className: "w-full" })}
+      >
+        Create an account <Icon name="arrowRight" data-icon="inline-end" />
+      </Link>
     </>
   )
 }

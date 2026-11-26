@@ -19,6 +19,11 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  // No marketing homepage: the root goes straight to sign-in (which forwards signed-in users to
+  // the dashboard).
+  async redirects() {
+    return [{ source: "/", destination: "/sign-in", permanent: false }]
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }]
   },

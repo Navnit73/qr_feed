@@ -1,6 +1,6 @@
 # QR Feed
 
-A Next.js app with a lime, amber, white and black design system. Read this file before changing UI.
+A Next.js app with an indigo-on-soft-gray design system (indigo sidebar, tinted KPI tiles). Read this file before changing UI.
 
 @AGENTS.md
 
@@ -49,7 +49,7 @@ src/app/            routes (App Router). /design is the live design-system refer
 src/app/globals.css design tokens, palette, base styles, utilities
 src/components/ui/  shadcn components (ours to edit; they carry our variants)
 src/app/(auth)/     sign-in, sign-up, forgot/reset password (Better Auth client)
-src/app/page.tsx    public homepage: product story + roadmap (src/lib/roadmap.ts; keep in sync with PHASES.md)
+next.config.ts      `/` redirects to /sign-in (no landing page); signed-in users are then sent to /dashboard
 src/app/(app)/      signed-in shell: dashboard, tickets, my-work, verifications, rca, audits, reports, branches (+ QR), users, settings, notifications, audit-log
 src/app/f/[code]    public feedback form a QR opens (no login, 5 languages + RTL + photos)
 src/app/t/[token]   reporter's private tracking page + post-closure satisfaction feedback
@@ -125,43 +125,44 @@ phase.md            the product plan the trackers follow
 
 ## Design system
 
-The tokens are in `src/app/globals.css`. Open `/design` to see every token and component rendered. The look follows the sibling project `../mymacstorage.com`.
+The tokens are in `src/app/globals.css`. Open `/design` to see every token and component rendered. The signed-in app follows the Cancer Healer Center dashboard sample: a deep indigo sidebar, soft gray page, slightly deeper gray cards, pastel icon tiles and a rose trend line.
 
-**Lime is for action, amber is for attention, and white and black carry the page.**
+**Indigo is for action and the sidebar, emerald is for success, and soft grays carry the page.** Pastel tones (`indigo`, `emerald`, `rose`, `amber`, `cyan`, `orange`, `sky`) tint icon tiles and progress bars via `components/cards/tone.ts`.
 
 ### Colour tokens
 
-| Token                                       | Light                            | Dark          | Use it for                                                   |
-| ------------------------------------------- | -------------------------------- | ------------- | ------------------------------------------------------------ |
-| `background/foreground`                     | white / black                    | black / white | the page                                                     |
-| `primary`                                   | lime-600                         | lime-600      | the main action on a screen: CTAs, selection                 |
-| `primary-hover`                             | lime-700                         | lime-500      | hover and pressed state of primary                           |
-| `secondary`                                 | amber-400                        | amber-400     | highlights: "New" or "Featured" badges, promos, a second CTA |
-| `inverse` (`bg-foreground text-background`) | black                            | white         | strong neutral buttons and badges                            |
-| `muted`                                     | gray-100                         | gray-900      | quiet surfaces, table headers, skeletons                     |
-| `muted-foreground`                          | gray-500                         | gray-400      | subtitles, captions, helper text                             |
-| `accent`                                    | gray-100                         | gray-900      | hover background for menus and list items                    |
-| `success`                                   | lime-700                         | lime-500      | confirmed states, success text, links                        |
-| `warning`                                   | orange-600                       | orange-500    | something needs attention soon                               |
-| `destructive`                               | red-600                          | red-500       | errors, delete                                               |
-| `info`                                      | sky-600                          | sky-500       | neutral tips                                                 |
-| `border` / `input`                          | gray-200                         | white 12%     | every border                                                 |
-| `ring`                                      | lime-600                         | lime-500      | focus indicators                                             |
-| `chart-1…5`                                 | lime and amber shades, then gray |               | charts                                                       |
+| Token                                       | Light                              | Dark          | Use it for                                                   |
+| ------------------------------------------- | ---------------------------------- | ------------- | ------------------------------------------------------------ |
+| `background/foreground`                     | gray-50 / gray-950                 | black / white | the page (`card` is gray-100, popovers are white)            |
+| `primary`                                   | indigo-800                         | indigo-500    | the main action on a screen: CTAs, selection                 |
+| `primary-hover`                             | indigo-900                         | indigo-400    | hover and pressed state of primary                           |
+| `secondary`                                 | indigo-100                         | indigo-950    | soft actions: Refresh, "New" badges, a second CTA            |
+| `inverse` (`bg-foreground text-background`) | black                              | white         | strong neutral buttons and badges                            |
+| `muted`                                     | gray-200                           | gray-900      | quiet surfaces, table headers, skeletons                     |
+| `muted-foreground`                          | gray-600                           | gray-400      | subtitles, captions, helper text                             |
+| `accent`                                    | indigo-50                          | indigo-950    | hover background for menus and list items                    |
+| `success`                                   | emerald-700                        | emerald-500   | confirmed states and success text (links use `text-primary`) |
+| `warning`                                   | orange-600                         | orange-500    | something needs attention soon                               |
+| `destructive`                               | rose-600                           | rose-500      | errors, delete                                               |
+| `info`                                      | sky-600                            | sky-500       | neutral tips                                                 |
+| `border` / `input`                          | gray-200 / gray-300                | white 12%     | every border                                                 |
+| `ring`                                      | indigo-600                         | indigo-400    | focus indicators                                             |
+| `chart-1…5`                                 | rose, indigo, emerald, amber, gray |               | charts (first series is the rose trend line)                 |
+| `sidebar-*`                                 | indigo-800, white text             | indigo-950    | the signed-in sidebar and mobile drawer                      |
 
 - Every colour has a `-foreground` pair. Always put `bg-X` together with `text-X-foreground`.
-- Warning is orange, not amber, on purpose. Amber is the brand highlight, so an amber warning would look like a promo.
+- Warning is orange, not amber, on purpose, so it stays distinct from the amber rating tile.
 - Dark mode is the `.dark` class on `<html>` (`@custom-variant dark`). Both themes are defined in `:root` and `.dark` in globals.css.
 
 ### Rules
 
-1. **Use semantic tokens first.** Write `bg-primary`, `text-muted-foreground` and `border-border`, not `bg-lime-600`. Use raw shades only for one-off decoration.
-2. **The palette is restricted.** `@theme` resets `--color-*`. Only white, black, gray (neutral values), lime, amber, orange, red and sky exist. A class like `bg-blue-500` or `text-zinc-400` produces no CSS at all, and a test enforces this. To add a colour, add it to `@theme` on purpose and document it here.
+1. **Use semantic tokens first.** Write `bg-primary`, `text-muted-foreground` and `border-border`, not `bg-indigo-800`. Use raw shades only for one-off decoration.
+2. **The palette is restricted.** `@theme` resets `--color-*`. Only white, black, gray (neutral values), indigo, emerald, cyan, rose, amber, orange, red and sky exist. A class like `bg-blue-500` or `text-zinc-400` produces no CSS at all, and a test enforces this. To add a colour, add it to `@theme` on purpose and document it here.
 3. **No shadows.** The `shadow-*`, `drop-shadow-*` and `text-shadow-*` utilities are disabled. Show depth with a `border`, a tint (`bg-muted`, `bg-warning/10`) or `backdrop-blur`. `ring-*` still works.
 4. **Use one primary button per view.** Further actions use `outline`, `ghost` or `secondary`.
 5. **Status tints use opacity.** Soft surfaces use `bg-warning/10 text-warning border-warning/30`. The `Badge` and `Alert` variants already do this, so use them rather than re-creating them.
-6. **Focus must always be visible.** Plain elements get a global 2px lime outline. shadcn controls use a lime `ring`. Never remove both.
-7. **Mind contrast.** Lime-600 with white text is about 3:1. That's acceptable on buttons with medium-weight text at 14px or larger, never for small body text. For lime text on white, use `text-success` (lime-700). Amber always gets black text.
+6. **Focus must always be visible.** Plain elements get a global 2px indigo outline. shadcn controls use an indigo `ring`. Never remove both.
+7. **Mind contrast.** Indigo-800 with white text has strong contrast everywhere. For brand-coloured text and links use `text-primary`; keep `text-success` for confirmed states only. Amber always gets black or amber-700 text.
 8. **Mobile first.** Use a 16px side gutter (`px-4`, then `sm:px-6`), never scroll sideways, and make touch targets at least 44px (`size="xl"`, `size="icon-xl"`).
 
 ### Type
@@ -169,7 +170,7 @@ The tokens are in `src/app/globals.css`. Open `/design` to see every token and c
 - Geist Sans for everything, Geist Mono for codes, IDs and token names.
 - Headings use `font-bold tracking-tight text-balance`. Section titles use `text-[clamp(1.85rem,6.4vw,3rem)] leading-[1.08]`, and page heroes use `text-[clamp(2.25rem,7vw,4rem)] leading-[1.05]`.
 - Body text is 16px with `leading-relaxed`. Keep lines under about 70 characters (`max-w-prose`). Subtitles use `text-muted-foreground text-pretty`.
-- The eyebrow label above section titles is `<Eyebrow>` from `@/components/section`: uppercase, `tracking-[0.14em]`, `text-success`, with lime rules on each side.
+- The eyebrow label above section titles is `<Eyebrow>` from `@/components/section`: uppercase, `tracking-[0.14em]`, `text-primary`, with indigo rules on each side.
 - Numbers in stats and tables use `tabular-nums`.
 
 ### Shape and spacing
@@ -182,7 +183,7 @@ The tokens are in `src/app/globals.css`. Open `/design` to see every token and c
 
 | Component                | Variants                                                                                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Button`                 | `default` (lime), `secondary` (amber), `inverse`, `outline`, `ghost`, `link`, `success`, `warning`, `destructive`                                |
+| `Button`                 | `default` (indigo), `secondary` (soft indigo), `inverse`, `outline`, `ghost`, `link`, `success`, `warning`, `destructive`                        |
 | Button sizes             | `xs`, `sm`, `default`, `lg`, `xl` (hero CTA, 44px), `icon`, `icon-xs`, `icon-sm`, `icon-lg`, `icon-xl` (44px)                                    |
 | `Badge`                  | `default`, `secondary`, `inverse`, `success`, `warning`, `destructive`, `info`, `muted`, `outline`, `ghost`, `link` (status ones are soft tints) |
 | `Alert`                  | `default`, `success`, `warning`, `destructive`, `info` (tinted border and background, icon in the status colour)                                 |
@@ -224,8 +225,8 @@ element.
 ### Utilities (in globals.css)
 
 - `.bg-dots`: a fine dot grid for heroes and CTAs. Set `--dot` to recolour it on dark surfaces.
-- `.bg-glow` and `.bg-glow-amber`: a soft radial lime or amber light at the top of an element.
-- `.edge-lime`: a gradient edge for a featured card. Wrap the card in an element with `rounded-2xl p-px`.
+- `.bg-glow` and `.bg-glow-amber`: a soft radial indigo or amber light at the top of an element.
+- `.edge-primary`: a gradient edge for a featured card. Wrap the card in an element with `rounded-2xl p-px`.
 - `.reveal`: the element rises in as it scrolls into view. CSS only, and it respects `prefers-reduced-motion`.
 - `animate-fade-in`.
 

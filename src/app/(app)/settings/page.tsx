@@ -175,7 +175,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
                         <td className="px-3 py-2 font-mono text-xs">
                           <Link
                             href={`/tickets/${e.ticketId.toHexString()}`}
-                            className="text-success hover:underline"
+                            className="text-primary hover:underline"
                           >
                             {e.ticketNumber}
                           </Link>

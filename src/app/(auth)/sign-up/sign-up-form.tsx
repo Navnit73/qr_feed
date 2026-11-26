@@ -23,11 +23,21 @@ export function SignUpForm({ next, email }: { next: string; email?: string }) {
     >
       {(state) => (
         <>
-          <FormField label="Full name" name="name" autoComplete="name" required state={state} />
+          <FormField
+            label="Full name"
+            name="name"
+            icon="user"
+            placeholder="Asha Rao"
+            autoComplete="name"
+            required
+            state={state}
+          />
           <FormField
             label="Email"
             name="email"
             type="email"
+            icon="mail"
+            placeholder="you@company.com"
             autoComplete="email"
             defaultValue={email}
             required
@@ -37,6 +47,8 @@ export function SignUpForm({ next, email }: { next: string; email?: string }) {
             label="Password"
             name="password"
             type="password"
+            icon="lock"
+            revealable
             autoComplete="new-password"
             minLength={10}
             hint="At least 10 characters."

@@ -34,9 +34,9 @@ describe("StatCard", () => {
     expect(screen.getByText("−20%")).toHaveClass("text-success")
   })
 
-  it("wraps a featured card in the lime edge", () => {
+  it("wraps a featured card in the brand edge", () => {
     const { container } = render(<StatCard label="Scans" value={5} featured />)
-    expect(container.firstElementChild).toHaveClass("edge-lime")
+    expect(container.firstElementChild).toHaveClass("edge-primary")
   })
 
   // BUG-001: cn() treated bg-glow-amber as a bg colour and dropped bg-card, so the

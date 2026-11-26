@@ -24,7 +24,7 @@ export function EmptyState({
       )}
     >
       {icon && (
-        <span className="mb-4 grid size-12 place-items-center rounded-full bg-primary/10 text-success">
+        <span className="mb-4 grid size-12 place-items-center rounded-full bg-primary/10 text-primary">
           <Icon name={icon} className="size-6" />
         </span>
       )}

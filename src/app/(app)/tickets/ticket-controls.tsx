@@ -308,7 +308,7 @@ export function TicketBoard({
               key={sv.id}
               className="inline-flex items-center gap-1 rounded-full border bg-card py-0.5 pr-1.5 pl-3 text-xs font-medium"
             >
-              <Link href={`/tickets?${qs.toString()}`} className="hover:text-success">
+              <Link href={`/tickets?${qs.toString()}`} className="hover:text-primary">
                 {sv.name}
               </Link>
               <button
@@ -592,7 +592,7 @@ export function TicketBoard({
                   <td className="px-4 py-3">
                     <Link
                       href={`/tickets/${t.id}`}
-                      className="font-mono text-xs font-semibold whitespace-nowrap text-success hover:underline"
+                      className="font-mono text-xs font-semibold whitespace-nowrap text-primary hover:underline"
                     >
                       {t.number}
                     </Link>
