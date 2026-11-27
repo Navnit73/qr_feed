@@ -5,6 +5,8 @@ import { resolveTenantContext } from "@/server/auth/context"
 import {
   acceptInvite,
   createInvite,
+  createMemberWithPassword,
+  type IdentityProvider,
   listInvites,
   listMembers,
   revokeInvite,
@@ -203,5 +205,163 @@ describe("members", () => {
     expect((await listInvites(baCtx)).some((i) => i.email === "exec@acme.test")).toBe(false)
     expect(await codeOf(setMemberStatus(baCtx, otherStaff._id, "inactive"))).toBe("FORBIDDEN")
     expect(await codeOf(revokeInvite(baCtx, orgAdminInvite.invite._id))).toBe("FORBIDDEN")
+  })
+})
+
+/** Stands in for Better Auth so the service can be tested without auth env vars. */
+function fakeIdentity(existingEmails: string[] = []) {
+  const created: { id: string; email: string; name: string; password: string }[] = []
+  const deleted: string[] = []
+  const identity: IdentityProvider = {
+    async createPasswordUser(input) {
+      if (existingEmails.includes(input.email)) {
+        const { ApiError } = await import("@/lib/api/errors")
+        throw new ApiError("CONFLICT", "That email already has an account.", {
+          email: ["Already has an account"],
+        })
+      }
+      const id = `user-${created.length + 1}`
+      created.push({ id, ...input })
+      return { id }
+    },
+    async deleteUser(id) {
+      deleted.push(id)
+    },
+  }
+  return { identity, created, deleted }
+}
+
+describe("create a user with a password", () => {
+  it("creates the sign-in account and an active membership with menu access", async () => {
+    const { ctx, tenant, branch } = await setup()
+    const { identity, created } = fakeIdentity()
+    const member = await createMemberWithPassword(
+      ctx,
+      {
+        name: "Ravi",
+        email: "Ravi@Acme.test",
+        password: "correct-horse-battery",
+        roles: ["l1_staff"],
+        branchIds: [branch._id.toHexString()],
+        menus: ["tickets", "my-work"],
+      },
+      identity,
+    )
+    expect(created).toEqual([
+      { id: "user-1", name: "Ravi", email: "ravi@acme.test", password: "correct-horse-battery" },
+    ])
+    expect(member.userId).toBe("user-1")
+    expect(member.menus).toEqual(["tickets", "my-work"])
+
+    const staff = await resolveTenantContext("user-1", tenant._id)
+    expect(staff?.menus && [...staff.menus]).toEqual(["tickets", "my-work"])
+    expect((await listAudit(ctx)).items[0].action).toBe("member.created")
+  })
+
+  it("stores 'all menus' as no restriction", async () => {
+    const { ctx, tenant } = await setup()
+    const { identity } = fakeIdentity()
+    await createMemberWithPassword(
+      ctx,
+      { name: "V", email: "v@x.test", password: "long-enough-pw", roles: ["verifier"] },
+      identity,
+    )
+    expect((await resolveTenantContext("user-1", tenant._id))?.menus).toBeNull()
+  })
+
+  it("validates the password and blocks existing members, existing accounts and escalation", async () => {
+    const { ctx, tenant, branch } = await setup()
+    const { identity, created } = fakeIdentity(["taken@x.test"])
+    const base = { name: "X", password: "long-enough-pw", roles: ["verifier"] }
+    expect(
+      await codeOf(
+        createMemberWithPassword(ctx, { ...base, email: "a@x.test", password: "short" }, identity),
+      ),
+    ).toBe("VALIDATION")
+    expect(
+      await codeOf(createMemberWithPassword(ctx, { ...base, email: owner.email }, identity)),
+    ).toBe("CONFLICT")
+    expect(
+      await codeOf(createMemberWithPassword(ctx, { ...base, email: "taken@x.test" }, identity)),
+    ).toBe("CONFLICT")
+
+    const branchAdmin = testContext({
+      tenantId: tenant._id,
+      roles: ["branch_admin"],
+      ...resolveAccess({ roles: ["branch_admin"], branchIds: [branch._id] }, []),
+    })
+    expect(
+      await codeOf(
+        createMemberWithPassword(
+          branchAdmin,
+          { ...base, email: "evil@x.test", roles: ["org_admin"] },
+          identity,
+        ),
+      ),
+    ).toBe("FORBIDDEN")
+    expect(created).toEqual([])
+  })
+
+  it("removes the new account again if the membership can't be saved", async () => {
+    const { ctx, tenant } = await setup()
+    const { identity, created, deleted } = fakeIdentity()
+    // Another admin adds the same person while the account is being created.
+    const racing: IdentityProvider = {
+      ...identity,
+      async createPasswordUser(input) {
+        const res = await identity.createPasswordUser(input)
+        await db()
+          .collection("members")
+          .insertOne({
+            tenantId: tenant._id,
+            userId: "someone-else",
+            email: input.email,
+            name: "Race",
+            roles: ["verifier"],
+            branchIds: [],
+            status: "active",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+        return res
+      },
+    }
+    expect(
+      await codeOf(
+        createMemberWithPassword(
+          ctx,
+          { name: "Y", email: "y@x.test", password: "long-enough-pw", roles: ["verifier"] },
+          racing,
+        ),
+      ),
+    ).toBe("CONFLICT")
+    expect(created).toHaveLength(1)
+    expect(deleted).toEqual(["user-1"])
+  })
+})
+
+describe("menu access", () => {
+  it("carries menus from an invite to the member and lets admins change them", async () => {
+    const { ctx, tenant } = await setup()
+    const { token } = await createInvite(ctx, {
+      email: newbie.email,
+      roles: ["verifier"],
+      branchIds: [],
+      menus: ["verifications"],
+    })
+    const m = await acceptInvite(newbie, token)
+    expect(m.menus).toEqual(["verifications"])
+
+    await updateMemberAccess(ctx, m._id, {
+      roles: ["verifier"],
+      branchIds: [],
+      menus: ["verifications", "tickets"],
+    })
+    const after = await resolveTenantContext(newbie.id, tenant._id)
+    expect(after?.menus && [...after.menus].sort()).toEqual(["tickets", "verifications"])
+
+    // Leaving menus out of an update keeps what they had.
+    await updateMemberAccess(ctx, m._id, { roles: ["verifier"], branchIds: [] })
+    expect((await resolveTenantContext(newbie.id, tenant._id))?.menus?.size).toBe(2)
   })
 })

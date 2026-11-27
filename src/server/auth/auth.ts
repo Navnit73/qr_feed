@@ -4,6 +4,7 @@ import { mongodbAdapter } from "better-auth/adapters/mongodb"
 import { nextCookies } from "better-auth/next-js"
 import { db, mongoClient } from "@/server/db/client"
 import { env } from "@/server/env"
+import { renderEmail } from "@/server/email-template"
 import { sendMail } from "@/server/mail"
 
 /*
@@ -46,7 +47,16 @@ function createAuth() {
         await sendMail({
           to: user.email,
           subject: "Reset your QR Feed password",
-          text: `Someone asked to reset your password. If it was you, open:\n${url}\n\nThe link expires in 1 hour.`,
+          ...renderEmail({
+            preheader: "Use this link within an hour to choose a new password.",
+            heading: "Reset your password",
+            intro: [
+              `Someone asked to reset the password for ${user.email}. If it was you, choose a new one below.`,
+              "The link expires in 1 hour and signs you out everywhere else once used.",
+            ],
+            cta: { label: "Choose a new password", url },
+            footnote: "Didn't ask for this? Ignore this email; your password stays the same.",
+          }),
         })
       },
     },

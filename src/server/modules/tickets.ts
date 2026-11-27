@@ -4,6 +4,7 @@ import { z } from "zod"
 import { ApiError } from "@/lib/api/errors"
 import { parseInput } from "@/lib/api/validation"
 import { SEVERITIES } from "@/lib/feedback-presets"
+import type { TicketRow } from "@/lib/ticket-display"
 import {
   transitionTicket,
   type TicketEvent,
@@ -15,7 +16,7 @@ import type { TenantContext } from "@/server/db/tenant-context"
 import { inBranchScope } from "@/server/db/tenant-context"
 import { withTransaction } from "@/server/db/transaction"
 import { pickAssignee } from "@/server/modules/assignment"
-import { notifyReporterClosure, notifyUser } from "@/server/modules/notifications"
+import { membersWhoCan, notifyReporterClosure, notifyUser } from "@/server/modules/notifications"
 import { dispatchWebhookEvent } from "@/server/modules/platform"
 import { computeInitialTicketSla } from "@/server/modules/sla"
 import { assertWithinLimit, getTenant } from "@/server/modules/tenants"
@@ -44,6 +45,8 @@ function escapeRegex(s: string) {
 export type TicketQueryFilters = {
   page?: number
   pageSize?: number
+  cursor?: string
+  includeTotal?: boolean
   status?: string
   excludeStatuses?: TicketStatus[]
   severity?: string
@@ -55,8 +58,53 @@ export type TicketQueryFilters = {
   q?: string
 }
 
-export async function queryTickets(ctx: TenantContext, filters: TicketQueryFilters = {}) {
-  assertCan(ctx, "ticket:read")
+export function encodeTicketCursor(doc: Pick<TicketDoc, "_id" | "createdAt">): string {
+  return Buffer.from(`${doc.createdAt.toISOString()}|${doc._id.toHexString()}`, "utf8").toString(
+    "base64url",
+  )
+}
+
+export function decodeTicketCursor(raw: string): { createdAt: Date; id: ObjectId } {
+  let decoded: string
+  try {
+    decoded = Buffer.from(raw, "base64url").toString("utf8")
+  } catch {
+    throw new ApiError("VALIDATION", "Invalid pagination cursor.")
+  }
+  const sep = decoded.indexOf("|")
+  if (sep === -1) throw new ApiError("VALIDATION", "Invalid pagination cursor.")
+  const iso = decoded.slice(0, sep)
+  const idHex = decoded.slice(sep + 1)
+  const createdAt = new Date(iso)
+  if (!Number.isFinite(createdAt.getTime()) || !ObjectId.isValid(idHex)) {
+    throw new ApiError("VALIDATION", "Invalid pagination cursor.")
+  }
+  return { createdAt, id: new ObjectId(idHex) }
+}
+
+export function serializeTicketRow(t: TicketDoc): TicketRow {
+  return {
+    id: t._id.toHexString(),
+    number: t.number,
+    locationName: t.locationPath.at(-1) ?? "",
+    locationParent: t.locationPath.slice(0, -1).join(" › "),
+    categoryName: t.categoryName,
+    description: t.description,
+    severity: t.severity,
+    status: t.status,
+    rating: t.rating,
+    reportCount: t.reportCount,
+    assigneeName: t.assignee?.name ?? null,
+    currentLevel: t.currentLevel ?? 1,
+    slaBreached: Boolean(t.sla?.breached),
+    slaPausedAt: t.sla?.pausedAt ? t.sla.pausedAt.toISOString() : null,
+    slaResolvedAt: t.sla?.resolvedAt ? t.sla.resolvedAt.toISOString() : null,
+    resolveDueAt: t.sla?.resolveDueAt ? t.sla.resolveDueAt.toISOString() : null,
+    createdAt: t.createdAt.toISOString(),
+  }
+}
+
+function buildTicketFilter(ctx: TenantContext, filters: TicketQueryFilters): Filter<TicketDoc> {
   const query: Filter<TicketDoc> = {}
 
   if (filters.status === "open") {
@@ -111,14 +159,108 @@ export async function queryTickets(ctx: TenantContext, filters: TicketQueryFilte
     }
   }
 
+  return query
+}
+
+export async function queryTickets(ctx: TenantContext, filters: TicketQueryFilters = {}) {
+  assertCan(ctx, "ticket:read")
+  const query = buildTicketFilter(ctx, filters)
   const sortOrder: Record<string, 1 | -1> =
-    filters.sort === "sla_due" ? { "sla.resolveDueAt": 1, createdAt: -1 } : { createdAt: -1 }
+    filters.sort === "sla_due"
+      ? { "sla.resolveDueAt": 1, createdAt: -1, _id: -1 }
+      : { createdAt: -1, _id: -1 }
 
   return tickets.forTenant(ctx).paginate(query, {
     page: filters.page ?? 1,
     pageSize: filters.pageSize ?? 25,
     sort: sortOrder,
   })
+}
+
+/**
+ * Backend cursor-based keyset pagination for infinite scroll on `/tickets`.
+ * - When `cursor` is provided: performs an O(1) indexed seek on `{ createdAt: -1, _id: -1 }`
+ *   so newly created tickets never shift/duplicate already-scrolled rows.
+ * - When `page > 1` without `cursor` (e.g. deep-linking to `/tickets?page=2`): starts from
+ *   that page using the same deterministic sort and returns `nextCursor` for scrolling onward.
+ */
+export async function queryTicketsCursor(
+  ctx: TenantContext,
+  filters: TicketQueryFilters = {},
+): Promise<{
+  items: TicketDoc[]
+  nextCursor: string | null
+  hasMore: boolean
+  total?: number
+  page: number
+  pageSize: number
+}> {
+  assertCan(ctx, "ticket:read")
+  const rawSize = filters.pageSize ?? 25
+  const pageSize = Number.isFinite(rawSize) ? Math.min(100, Math.max(1, Math.floor(rawSize))) : 25
+  const rawPage = filters.page ?? 1
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
+  const sort: Record<string, 1 | -1> = { createdAt: -1, _id: -1 }
+  const baseQuery = buildTicketFilter(ctx, filters)
+  const repo = tickets.forTenant(ctx)
+
+  // Keyset cursor mode (used on every scroll fetch): 1 indexed query, zero skip drift.
+  if (filters.cursor) {
+    const { createdAt, id } = decodeTicketCursor(filters.cursor)
+    const cursorClause: Filter<TicketDoc> = {
+      $or: [{ createdAt: { $lt: createdAt } }, { createdAt, _id: { $lt: id } }],
+    }
+    const finalFilter: Filter<TicketDoc> =
+      Object.keys(baseQuery).length > 0 ? { $and: [baseQuery, cursorClause] } : cursorClause
+
+    const [batch, total] = await Promise.all([
+      repo.find(finalFilter, { sort, limit: pageSize + 1 }),
+      filters.includeTotal ? repo.count(baseQuery) : Promise.resolve(undefined),
+    ])
+    const hasMore = batch.length > pageSize
+    const items = hasMore ? batch.slice(0, pageSize) : batch
+    const last = items.at(-1)
+    return {
+      items,
+      nextCursor: hasMore && last ? encodeTicketCursor(last) : null,
+      hasMore,
+      ...(total !== undefined ? { total } : {}),
+      page,
+      pageSize,
+    }
+  }
+
+  // Deep-link offset start (e.g. `/tickets?page=2`): paginate to requested page and emit nextCursor.
+  if (page > 1) {
+    const { items, meta } = await repo.paginate(baseQuery, { page, pageSize, sort })
+    const hasMore = meta.page < meta.totalPages && items.length > 0
+    const last = items.at(-1)
+    return {
+      items,
+      nextCursor: hasMore && last ? encodeTicketCursor(last) : null,
+      hasMore,
+      total: meta.total,
+      page: meta.page,
+      pageSize: meta.pageSize,
+    }
+  }
+
+  // Initial page 1 load: 1 find(limit + 1) + 1 count in parallel.
+  const [batch, total] = await Promise.all([
+    repo.find(baseQuery, { sort, limit: pageSize + 1 }),
+    filters.includeTotal === false ? Promise.resolve(undefined) : repo.count(baseQuery),
+  ])
+  const hasMore = batch.length > pageSize
+  const items = hasMore ? batch.slice(0, pageSize) : batch
+  const last = items.at(-1)
+  return {
+    items,
+    nextCursor: hasMore && last ? encodeTicketCursor(last) : null,
+    hasMore,
+    ...(total !== undefined ? { total } : {}),
+    page: 1,
+    pageSize,
+  }
 }
 
 /** Lightweight active-teammate list for assign dropdowns, gated by ticket:assign or ticket:create (not user:read). */
@@ -264,6 +406,7 @@ export async function createManualTicket(
 
   const validAttachments = await filterValidAttachments(ctx, input.attachments)
   const nameOfActor = await actorName(ctx)
+  let allocatedSeq: number | undefined
   const ticket = await withTransaction(async (session) => {
     const now = new Date()
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
@@ -287,8 +430,8 @@ export async function createManualTicket(
       ))
 
     const year = now.getUTCFullYear()
-    const seq = await nextSequence(`${ctx.tenantId.toHexString()}:tickets:${year}`, session)
-    const number = `TKT-${year}-${String(seq).padStart(6, "0")}`
+    allocatedSeq ??= await nextSequence(`${ctx.tenantId.toHexString()}:tickets:${year}`)
+    const number = `TKT-${year}-${String(allocatedSeq).padStart(6, "0")}`
     const initialSla = await computeInitialTicketSla(
       ctx,
       { branchId: loc.branchId, categoryId: cat._id, severity: input.severity, createdAt: now },
@@ -355,14 +498,42 @@ export async function createManualTicket(
     return created
   })
 
-  if (ticket.assignee && ticket.assignee.userId !== ctx.actorId) {
-    await notifyUser(ctx, {
-      userId: ticket.assignee.userId,
-      type: "ticket.assigned",
-      title: `Assigned ${ticket.number} · ${ticket.categoryName}`,
-      body: `${ticket.locationPath.join(" › ")}: ${ticket.description.slice(0, 140)}`,
-      href: `/tickets/${ticket._id.toHexString()}`,
+  const details: [string, string][] = [
+    ["Ticket", ticket.number],
+    ["Location", ticket.locationPath.join(" › ")],
+    ["Issue", ticket.categoryName],
+    ["Priority", ticket.severity],
+  ]
+  if (ticket.assignee) {
+    if (ticket.assignee.userId !== ctx.actorId) {
+      await notifyUser(ctx, {
+        userId: ticket.assignee.userId,
+        type: "ticket.assigned",
+        title: `Assigned ${ticket.number} · ${ticket.categoryName}`,
+        body: ticket.description.slice(0, 280) || `${ticket.categoryName} needs attention.`,
+        href: `/tickets/${ticket._id.toHexString()}`,
+        details,
+        cta: "Open ticket",
+      })
+    }
+  } else {
+    // Unassigned: tell the people who can assign it in this branch (not the creator).
+    const assigners = await membersWhoCan(ctx, ["ticket:assign"], ticket.branchId, {
+      exclude: ctx.actorId,
     })
+    await Promise.allSettled(
+      assigners.map((m) =>
+        notifyUser(ctx, {
+          userId: m.userId,
+          type: "ticket.created",
+          title: `New ticket ${ticket.number} · ${ticket.categoryName}`,
+          body: `Nobody was auto-assigned. ${ticket.description.slice(0, 280)}`,
+          href: `/tickets/${ticket._id.toHexString()}`,
+          details,
+          cta: "Assign ticket",
+        }),
+      ),
+    )
   }
 
   dispatchWebhookEvent(ctx, "ticket.created", {
@@ -576,9 +747,16 @@ export async function applyTicketTransition(
       type: check.activityType,
       title: `Assigned ${existing.number} · ${existing.categoryName}`,
       body: note
-        ? `${existing.locationPath.join(" › ")} — ${note}`
-        : existing.locationPath.join(" › "),
+        ? `${whoName} assigned this to you: ${note}`
+        : `${whoName} assigned this ticket to you.`,
       href: `/tickets/${existing._id.toHexString()}`,
+      details: [
+        ["Ticket", existing.number],
+        ["Location", existing.locationPath.join(" › ")],
+        ["Issue", existing.categoryName],
+        ["Priority", existing.severity],
+      ],
+      cta: "Open ticket",
     })
   } else if (
     check.nextStatus === "reopened" &&
@@ -615,10 +793,30 @@ export async function applyTicketTransition(
         href: `/tickets/${existing._id.toHexString()}`,
       })
     }
-  } else if (
+  }
+
+  if (
     check.nextStatus === "closed" &&
-    (existing.reporter.email || existing.reporter.phone)
+    existing.assignee &&
+    existing.assignee.userId !== ctx.actorId
   ) {
+    // Close the loop with whoever did the work.
+    await notifyUser(ctx, {
+      userId: existing.assignee.userId,
+      type: "ticket.closed",
+      title: `Closed ${existing.number} · ${existing.categoryName}`,
+      body: note
+        ? `${whoName} verified and closed it: ${note}`
+        : `${whoName} verified and closed it.`,
+      href: `/tickets/${existing._id.toHexString()}`,
+      details: [
+        ["Ticket", existing.number],
+        ["Location", existing.locationPath.join(" › ")],
+      ],
+      cta: "View ticket",
+    })
+  }
+  if (check.nextStatus === "closed" && (existing.reporter.email || existing.reporter.phone)) {
     const tenant = await getTenant(ctx.tenantId)
     await notifyReporterClosure({
       tenantName: tenant?.name ?? "QR Feed",

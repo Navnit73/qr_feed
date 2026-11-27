@@ -257,6 +257,39 @@ const factories: Record<string, (branchId: ObjectId) => Record<string, unknown>>
     prevHash: "",
     hash: new ObjectId().toHexString(),
   }),
+  surveys: (branchId) => ({
+    branchId,
+    locationId: null,
+    scopeLabel: "All branches",
+    title: "Patient Satisfaction Survey",
+    description: "Tell us how your visit went.",
+    shortCode: new ObjectId().toHexString().slice(0, 10),
+    status: "active",
+    questions: [{ id: "q1", type: "rating", label: "Overall experience", required: true }],
+    collectContact: true,
+    thankYouMessage: "Thank you for your feedback!",
+    scanCount: 0,
+    responseCount: 0,
+    lastResponseAt: null,
+    createdBy: "u1",
+  }),
+  surveyResponses: (branchId) => ({
+    surveyId: new ObjectId(),
+    branchId,
+    locationId: null,
+    answers: [
+      {
+        questionId: "q1",
+        questionLabel: "Overall experience",
+        questionType: "rating",
+        value: 5,
+      },
+    ],
+    overallRating: 5,
+    npsScore: null,
+    respondent: { anonymous: true },
+    submittedAt: new Date(),
+  }),
 }
 
 setupTestDb()

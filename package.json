@@ -22,7 +22,8 @@
     "db:dev": "tsx scripts/dev-db.mts",
     "worker": "tsx --conditions=react-server --env-file=.env.local worker/index.mts",
     "prepare": "husky",
-    "db:seed": "tsx --conditions=react-server --env-file=.env.local scripts/seed.mts"
+    "db:seed": "tsx --conditions=react-server --env-file=.env.local scripts/seed.mts",
+    "load:demo": "tsx --conditions=react-server --env-file=.env.local scripts/load-test-demo.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

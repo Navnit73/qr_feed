@@ -5,6 +5,16 @@ export function appBaseUrl(): string {
   return env().BETTER_AUTH_URL.replace(/\/+$/, "")
 }
 
+/** Absolute link to an app path for emails. Falls back to localhost when env isn't loaded (tests). */
+export function appUrl(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`
+  try {
+    return `${appBaseUrl()}${p}`
+  } catch {
+    return `http://localhost:3000${p}`
+  }
+}
+
 /** The link printed in a QR code. Uses tenant custom domain when configured (P9). */
 export function publicQrUrl(shortCode: string, customDomain?: string) {
   const domain = customDomain
@@ -15,6 +25,18 @@ export function publicQrUrl(shortCode: string, customDomain?: string) {
     return `https://${domain}/f/${shortCode}`
   }
   return `${appBaseUrl()}/f/${shortCode}`
+}
+
+/** The public link printed in a custom survey QR code (`/s/<shortCode>`). */
+export function publicSurveyUrl(shortCode: string, customDomain?: string) {
+  const domain = customDomain
+    ?.trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/+$/, "")
+  if (domain && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain)) {
+    return `https://${domain}/s/${shortCode}`
+  }
+  return `${appBaseUrl()}/s/${shortCode}`
 }
 
 /** Client IP for rate limiting. Prefers trusted single-value proxy headers over client-supplied XFF hops. */

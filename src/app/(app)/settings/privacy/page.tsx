@@ -8,6 +8,7 @@ import { requireTenantContext } from "@/server/auth/session"
 import { getTenant } from "@/server/modules/tenants"
 import { can } from "@/server/rbac/ability"
 import { PrivacyControls } from "./privacy-controls"
+import { SettingsNav, settingsTabs } from "../settings-nav"
 
 export const metadata: Metadata = { title: "Data & Privacy · QR Feed" }
 
@@ -32,6 +33,7 @@ export default async function PrivacySettingsPage() {
           </a>
         }
       />
+      <SettingsNav tabs={settingsTabs(ctx)} active="privacy" />
 
       <PanelCard title="Retention, anonymisation & deletion">
         <PrivacyControls

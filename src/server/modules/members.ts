@@ -11,6 +11,12 @@ import { withTransaction } from "@/server/db/transaction"
 import { assertWithinLimit, getTenant, tenantsCollection } from "@/server/modules/tenants"
 import type { SessionUser } from "@/server/modules/onboarding"
 import { assertCan, canGrantRoles, isKnownRole, type CustomRole } from "@/server/rbac/ability"
+import { renderEmail, type EmailContent } from "@/server/email-template"
+import { sendMail } from "@/server/mail"
+import { notifyUser } from "@/server/modules/notifications"
+import { roleLabel } from "@/server/rbac/labels"
+import { CONFIGURABLE_MENUS, MENU_KEYS, normalizeMenus } from "@/server/rbac/menus"
+import { appUrl } from "@/server/public-url"
 import { branches, invites, members, roles as rolesRepo } from "@/server/repositories"
 import { isDuplicateKey, objectId } from "@/server/validation"
 
@@ -25,10 +31,29 @@ const accessSchema = z.object({
     .regex(/^\+?[\d\s()-]{7,20}$/, "Enter a valid phone number")
     .optional()
     .or(z.literal("").transform(() => undefined)),
+  /** Omitted = unchanged (edits) or every menu (new people); see `normalizeMenus`. */
+  menus: z.array(z.enum(MENU_KEYS, { error: "Unknown menu" })).nullish(),
 })
 const inviteSchema = accessSchema.extend({
   email: z.email({ error: "Enter a valid email" }).trim().toLowerCase(),
 })
+// Better Auth's own limits (auth.ts): 10–128 characters.
+const passwordUserSchema = inviteSchema.extend({
+  name: z.string().trim().min(1, "Enter their name").max(100),
+  password: z.string().min(10, "Use at least 10 characters").max(128, "Use at most 128 characters"),
+})
+
+/**
+ * Creates and removes sign-in accounts. Better Auth in the app (`@/server/auth/accounts`), a
+ * fake in tests, so this module stays testable without auth secrets.
+ */
+export type IdentityProvider = {
+  /** Throws `ApiError("CONFLICT")` with an `email` field error when the email is taken. */
+  createPasswordUser(input: { name: string; email: string; password: string }): Promise<{
+    id: string
+  }>
+  deleteUser(id: string): Promise<void>
+}
 
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex")
 
@@ -95,6 +120,62 @@ async function validateAccess(
   return { custom, roles, branchIds }
 }
 
+// ── Account emails ───────────────────────────────────────────────────────────────────
+// Sent whatever the person's alert settings are: they are about their own access.
+
+async function accountEmailContext(ctx: TenantContext) {
+  const [tenant, actor, custom] = await Promise.all([
+    getTenant(ctx.tenantId),
+    members.forTenant(ctx).findOne({ userId: ctx.actorId }, { projection: { name: 1 } }),
+    rolesRepo.forTenant(ctx).find({}, { projection: { name: 1 } }),
+  ])
+  const customNames = new Map(custom.map((r) => [r._id.toHexString(), r.name]))
+  return {
+    org: tenant?.name ?? "your organisation",
+    actor: actor?.name ?? "An administrator",
+    roles: (keys: string[]) => keys.map((k) => roleLabel(k, customNames)).join(", ") || "None",
+  }
+}
+
+async function branchNames(ctx: TenantContext, ids: ObjectId[]) {
+  if (!ids.length) return "All branches their roles allow"
+  const docs = await branches
+    .forTenant({ ...ctx, branchScope: "all" })
+    .find({ _id: { $in: ids } }, { projection: { name: 1 } })
+  return docs.map((b) => b.name).join(", ")
+}
+
+function menuSummary(menus: string[] | null | undefined) {
+  if (!menus) return "All menus their roles allow"
+  const labels = new Map<string, string>(CONFIGURABLE_MENUS.map((m) => [m.key, m.label]))
+  return ["Dashboard", ...menus.map((k) => labels.get(k) ?? k)].join(", ")
+}
+
+function sendAccountEmail(to: string, subject: string, content: EmailContent) {
+  return sendMail({ to, subject, ...renderEmail(content) }).catch(() => undefined)
+}
+
+/** The invite email; the raw token only exists in this link. */
+export async function inviteEmail(
+  ctx: TenantContext,
+  invite: { email: string; roles: string[] },
+  link: string,
+) {
+  const e = await accountEmailContext(ctx)
+  return sendAccountEmail(invite.email, `You're invited to ${e.org}`, {
+    brand: e.org,
+    preheader: `${e.actor} invited you to ${e.org} on QR Feed.`,
+    heading: `Join ${e.org} on QR Feed`,
+    intro: [
+      `${e.actor} invited you to work on ${e.org}'s feedback and tickets in QR Feed.`,
+      "Accept the invite to create your account or sign in. The link works once and expires in 7 days.",
+    ],
+    details: [["Role", e.roles(invite.roles)]],
+    cta: { label: "Accept invite", url: link },
+    footnote: "Not expecting this? You can ignore it; nothing happens unless you accept.",
+  })
+}
+
 // ── Invites ──────────────────────────────────────────────────────────────────────────
 
 export async function createInvite(ctx: TenantContext, raw: z.input<typeof inviteSchema>) {
@@ -133,6 +214,7 @@ export async function createInvite(ctx: TenantContext, raw: z.input<typeof invit
         email: input.email,
         roles,
         branchIds,
+        menus: normalizeMenus(input.menus) ?? null,
         tokenHash: hashToken(token),
         expiresAt: new Date(now.getTime() + INVITE_TTL_MS),
         invitedBy: ctx.actorId,
@@ -146,7 +228,12 @@ export async function createInvite(ctx: TenantContext, raw: z.input<typeof invit
         action: "invite.created",
         entity: "invite",
         entityId: doc._id,
-        after: { email: doc.email, roles: doc.roles, branchIds: doc.branchIds },
+        after: {
+          email: doc.email,
+          roles: doc.roles,
+          branchIds: doc.branchIds,
+          menus: doc.menus ?? null,
+        },
       },
       { session },
     )
@@ -237,6 +324,7 @@ export async function acceptInvite(user: SessionUser, token: string) {
           name: user.name,
           roles: invite.roles,
           branchIds: invite.branchIds,
+          menus: invite.menus ?? null,
           status: "active",
         },
         { session },
@@ -258,6 +346,130 @@ export async function acceptInvite(user: SessionUser, token: string) {
       throw new ApiError("CONFLICT", "You're already a member of this organisation.")
     throw err
   }
+}
+
+// ── Direct creation (admin sets the password) ───────────────────────────────────────
+
+/** Seats = active members + live invites, like `createInvite`, so neither path can overshoot. */
+async function usedSeats(ctx: TenantContext, session?: import("mongodb").ClientSession) {
+  const now = new Date()
+  return (
+    (await members.forTenant(ctx).count({ status: "active" }, { session })) +
+    (await invites
+      .forTenant(ctx)
+      .count({ status: "pending", expiresAt: { $gt: now } }, { session }))
+  )
+}
+
+async function assertEmailFree(
+  ctx: TenantContext,
+  email: string,
+  session?: import("mongodb").ClientSession,
+) {
+  if (await members.forTenant(ctx).findOne({ email }, { session })) {
+    throw new ApiError("CONFLICT", "That person is already a member.", {
+      email: ["Already a member"],
+    })
+  }
+  if (
+    await invites
+      .forTenant(ctx)
+      .findOne({ email, status: "pending", expiresAt: { $gt: new Date() } }, { session })
+  ) {
+    throw new ApiError("CONFLICT", "There's a pending invite for that email. Revoke it first.", {
+      email: ["Already invited"],
+    })
+  }
+}
+
+/**
+ * Adds someone with a password the admin sets, instead of an invite link. Same rules as an
+ * invite (no escalation, branch scope, seat limit), and the sign-in account is removed again
+ * if the membership can't be saved, so no orphan logins are left behind.
+ */
+export async function createMemberWithPassword(
+  ctx: TenantContext,
+  raw: z.input<typeof passwordUserSchema>,
+  identity: IdentityProvider,
+) {
+  assertCan(ctx, "user:invite")
+  const input = parseInput(passwordUserSchema, raw)
+  const { roles, branchIds } = await validateAccess(ctx, input)
+  // Cheap checks first, so a doomed request never creates an account.
+  await assertEmailFree(ctx, input.email)
+  await assertWithinLimit(ctx, "users", await usedSeats(ctx))
+
+  const user = await identity.createPasswordUser({
+    name: input.name,
+    email: input.email,
+    password: input.password,
+  })
+  let created
+  try {
+    created = await withTransaction(async (session) => {
+      await assertEmailFree(ctx, input.email, session)
+      await assertWithinLimit(ctx, "users", await usedSeats(ctx, session), session)
+      const member = await members.forTenant(ctx).insertOne(
+        {
+          userId: user.id,
+          email: input.email,
+          name: input.name,
+          ...(input.phone ? { phone: input.phone } : {}),
+          roles,
+          branchIds,
+          menus: normalizeMenus(input.menus) ?? null,
+          status: "active",
+        },
+        { session },
+      )
+      await appendAudit(
+        ctx,
+        {
+          action: "member.created",
+          entity: "member",
+          entityId: member._id,
+          // Never the password, not even hashed.
+          after: {
+            email: member.email,
+            roles: member.roles,
+            branchIds: member.branchIds,
+            menus: member.menus,
+            via: "password",
+          },
+        },
+        { session },
+      )
+      return member
+    })
+  } catch (err) {
+    await identity.deleteUser(user.id).catch(() => {})
+    if (isDuplicateKey(err)) {
+      throw new ApiError("CONFLICT", "That person is already a member.", {
+        email: ["Already a member"],
+      })
+    }
+    throw err
+  }
+
+  // Never include the password: the admin shares it out of band.
+  const e = await accountEmailContext(ctx)
+  await sendAccountEmail(created.email, `You've been added to ${e.org}`, {
+    brand: e.org,
+    preheader: `${e.actor} created a QR Feed account for you.`,
+    heading: `Welcome to ${e.org}`,
+    intro: [
+      `${e.actor} created a QR Feed account for you in ${e.org}.`,
+      "Sign in with this email address and the password they share with you. You can set your own any time with \u201cForgot password\u201d on the sign-in page.",
+    ],
+    details: [
+      ["Email", created.email],
+      ["Role", e.roles(created.roles)],
+      ["Branches", await branchNames(ctx, created.branchIds)],
+      ["Menus", menuSummary(created.menus)],
+    ],
+    cta: { label: "Sign in", url: appUrl("/sign-in") },
+  })
+  return created
 }
 
 // ── Members ──────────────────────────────────────────────────────────────────────────
@@ -310,10 +522,12 @@ export async function updateMemberAccess(
   const member = await loadMember(ctx, idRaw)
   const input = parseInput(accessSchema, raw)
   const { roles, branchIds } = await validateAccess(ctx, input)
-  return withTransaction(async (session) => {
+  const updated = await withTransaction(async (session) => {
     if (!roles.includes("org_admin")) await assertNotLastAdmin(ctx, member, session)
     const $set: Record<string, unknown> = { roles, branchIds }
     if (input.phone !== undefined) $set.phone = input.phone
+    const menus = normalizeMenus(input.menus)
+    if (menus !== undefined) $set.menus = menus
     const updated = await members
       .forTenant(ctx)
       .updateOne({ _id: member._id }, { $set }, { session })
@@ -323,13 +537,53 @@ export async function updateMemberAccess(
         action: "member.updated",
         entity: "member",
         entityId: member._id,
-        before: { roles: member.roles, branchIds: member.branchIds },
-        after: { roles, branchIds },
+        before: { roles: member.roles, branchIds: member.branchIds, menus: member.menus ?? null },
+        after: { roles, branchIds, menus: menus === undefined ? (member.menus ?? null) : menus },
       },
       { session },
     )
     return updated!
   })
+
+  const sameSet = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((x) => b.includes(x))
+  const beforeMenus = member.menus ?? null
+  const afterMenus = updated.menus ?? null
+  const changed = {
+    roles: !sameSet(member.roles, updated.roles),
+    branches: !sameSet(
+      member.branchIds.map((b) => b.toHexString()),
+      updated.branchIds.map((b) => b.toHexString()),
+    ),
+    menus:
+      (beforeMenus === null) !== (afterMenus === null) ||
+      (beforeMenus !== null && afterMenus !== null && !sameSet(beforeMenus, afterMenus)),
+  }
+  if ((changed.roles || changed.branches || changed.menus) && member.userId !== ctx.actorId) {
+    const e = await accountEmailContext(ctx)
+    const details: [string, string][] = [
+      [
+        "Role",
+        changed.roles
+          ? `${e.roles(member.roles)} → ${e.roles(updated.roles)}`
+          : e.roles(updated.roles),
+      ],
+      ["Branches", await branchNames(ctx, updated.branchIds)],
+      ["Menus", menuSummary(afterMenus)],
+    ]
+    await notifyUser(ctx, {
+      userId: member.userId,
+      type: "account.access_changed",
+      title: `Your access in ${e.org} changed`,
+      body: `${e.actor} updated what you can see and do in ${e.org}. It applies the next time you open a page.`,
+      href: "/dashboard",
+      details,
+      cta: "Open QR Feed",
+      essential: true,
+      channels: ["in_app", "email"],
+    })
+  }
+  return updated
 }
 
 export async function setMemberStatus(
@@ -342,7 +596,7 @@ export async function setMemberStatus(
   if (status === "inactive" && member.userId === ctx.actorId) {
     throw new ApiError("CONFLICT", "You can't deactivate yourself.")
   }
-  return withTransaction(async (session) => {
+  const result = await withTransaction(async (session) => {
     if (status === "inactive") {
       await assertNotLastAdmin(ctx, member, session)
     } else {
@@ -370,4 +624,30 @@ export async function setMemberStatus(
     )
     return updated!
   })
+
+  // Sent directly: once deactivated they no longer get member notifications.
+  const e = await accountEmailContext(ctx)
+  await sendAccountEmail(
+    member.email,
+    status === "inactive"
+      ? `Your access to ${e.org} was removed`
+      : `Your access to ${e.org} is back`,
+    status === "inactive"
+      ? {
+          brand: e.org,
+          heading: `Your access to ${e.org} was removed`,
+          intro: [
+            `${e.actor} deactivated your account in ${e.org}. You're signed out of it straight away.`,
+            "Your past work stays in the record. If you think this is a mistake, contact your administrator.",
+          ],
+        }
+      : {
+          brand: e.org,
+          heading: `Welcome back to ${e.org}`,
+          intro: `${e.actor} reactivated your account in ${e.org}, with the roles you had before.`,
+          details: [["Role", e.roles(member.roles)]],
+          cta: { label: "Sign in", url: appUrl("/sign-in") },
+        },
+  )
+  return result
 }

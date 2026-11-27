@@ -6,6 +6,7 @@ import { requireTenantContext } from "@/server/auth/session"
 import { getNotificationPreferences } from "@/server/modules/reports"
 import { can } from "@/server/rbac/ability"
 import { NotificationPrefsForm } from "./prefs-form"
+import { SettingsNav, settingsTabs } from "../settings-nav"
 
 export const metadata: Metadata = { title: "Notification preferences · QR Feed" }
 
@@ -29,6 +30,7 @@ export default async function NotificationPrefsPage() {
           { label: "Notifications" },
         ]}
       />
+      <SettingsNav tabs={settingsTabs(ctx)} active="notifications" />
       <PanelCard title="Personal alert settings">
         <NotificationPrefsForm prefs={prefs} timeZones={timeZoneOptions()} />
       </PanelCard>

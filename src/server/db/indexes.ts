@@ -84,7 +84,9 @@ export async function ensureIndexes() {
     d.collection("tickets").createIndexes([
       { key: { tenantId: 1, number: 1 }, unique: true },
       { key: { tenantId: 1, createdAt: -1 } },
+      { key: { tenantId: 1, createdAt: -1, _id: -1 } },
       { key: { tenantId: 1, status: 1, createdAt: -1 } },
+      { key: { tenantId: 1, status: 1, createdAt: -1, _id: -1 } },
       { key: { tenantId: 1, branchId: 1, status: 1, createdAt: -1 } },
       { key: { tenantId: 1, "assignee.userId": 1, status: 1, "sla.resolveDueAt": 1 } },
       { key: { tenantId: 1, "sla.resolveDueAt": 1, status: 1 } },
@@ -186,5 +188,35 @@ export async function ensureIndexes() {
       ]),
 
     d.collection("rateLimits").createIndexes([{ key: { expiresAt: 1 }, expireAfterSeconds: 0 }]),
+
+    d
+      .collection("surveys")
+      .createIndexes([
+        { key: { shortCode: 1 }, unique: true },
+        { key: { tenantId: 1, status: 1, createdAt: -1 } },
+        { key: { tenantId: 1, branchId: 1, status: 1 } },
+      ]),
+
+    d
+      .collection("surveyResponses")
+      .createIndexes([
+        { key: { tenantId: 1, surveyId: 1, submittedAt: -1, _id: -1 } },
+        { key: { tenantId: 1, submittedAt: -1 } },
+      ]),
+
+    d
+      .collection("surveys")
+      .createIndexes([
+        { key: { shortCode: 1 }, unique: true },
+        { key: { tenantId: 1, status: 1, createdAt: -1 } },
+        { key: { tenantId: 1, branchId: 1, status: 1 } },
+      ]),
+
+    d
+      .collection("surveyResponses")
+      .createIndexes([
+        { key: { tenantId: 1, surveyId: 1, submittedAt: -1, _id: -1 } },
+        { key: { tenantId: 1, submittedAt: -1 } },
+      ]),
   ])
 }

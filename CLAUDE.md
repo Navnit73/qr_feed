@@ -83,6 +83,7 @@ phase.md            the product plan the trackers follow
 - **Every mutation writes `appendAudit(ctx, {...}, { session })` inside the same `withTransaction`.** The audit log is append-only and hash-chained; `verifyChain` must stay green.
 - **Validate input with `parseInput(schema, raw)`.** It throws `ApiError("VALIDATION")` with field errors that `FormField` renders under each input.
 - **Granting access:** `canGrantRoles` stops anyone giving more than they hold; keep that check on any new role or permission UI.
+- **Sidebar menus** come from `src/server/rbac/menus.ts` (`visibleMenus(ctx)` = permissions ∩ the member's `menus` list; `null` = all). A new top-level page needs an entry there. `requireTenantContext()` also redirects to /dashboard when a member opens a page of a menu switched off for them (the proxy passes the path in `x-qrf-pathname`). Menus narrow the workspace; permissions remain the security boundary.
 - **Lookups that resolve a tenant** (invite tokens, later QR codes) use `repo.unscoped()` with a hashed or unguessable key, never a client-supplied tenantId.
 
 ## Pages, actions and Cache Components

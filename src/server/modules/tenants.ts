@@ -125,7 +125,8 @@ export async function assertWithinLimit(
   session?: ClientSession,
 ) {
   const tenant = await getTenant(ctx.tenantId, session)
-  const limit = tenant?.limits[kind] ?? 0
+  const limit =
+    tenant?.limits[kind] ?? (tenant ? PLAN_CATALOG[tenant.plan]?.limits[kind] : undefined) ?? 0
   if (currentCount >= limit) {
     throw new ApiError(
       "CONFLICT",

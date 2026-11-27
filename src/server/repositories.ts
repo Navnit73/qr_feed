@@ -52,6 +52,8 @@ export type MemberDoc = TenantDoc & {
   /** System role keys (`l1_staff`) or `custom:<roleId>`. */
   roles: string[]
   branchIds: ObjectId[]
+  /** Sidebar menu keys this member sees; `null`/absent = all their roles allow. */
+  menus?: string[] | null
   status: "active" | "inactive"
 }
 export const members = defineRepository<MemberDoc>("members")
@@ -60,6 +62,7 @@ export type InviteDoc = TenantDoc & {
   email: string
   roles: string[]
   branchIds: ObjectId[]
+  menus?: string[] | null
   /** sha256 of the token. The raw token only ever exists in the invite link. */
   tokenHash: string
   expiresAt: Date
@@ -481,6 +484,8 @@ export type NotificationPrefDoc = TenantDoc & {
   channels: { in_app: boolean; email: boolean; sms: boolean; whatsapp: boolean; push: boolean }
   events: {
     assigned: boolean
+    /** New tickets in my branches that nobody was auto-assigned. Absent on older docs = on. */
+    newTicket?: boolean
     escalated: boolean
     verification: boolean
     capaDue: boolean
@@ -557,5 +562,67 @@ export type WebhookDeliveryDoc = TenantDoc & {
   deliveredAt: Date
 }
 export const webhookDeliveries = defineRepository<WebhookDeliveryDoc>("webhookDeliveries", {
+  appendOnly: true,
+})
+
+// ── Custom Surveys & QR Feedback Forms ──────────────────────────────────────────────
+
+export const SURVEY_QUESTION_TYPES = [
+  "rating",
+  "nps",
+  "single_choice",
+  "multi_choice",
+  "yes_no",
+  "short_text",
+  "long_text",
+] as const
+export type SurveyQuestionType = (typeof SURVEY_QUESTION_TYPES)[number]
+
+export type SurveyQuestion = {
+  id: string
+  type: SurveyQuestionType
+  label: string
+  helpText?: string
+  required: boolean
+  options?: string[]
+}
+
+export type SurveyDoc = TenantDoc & {
+  branchId?: ObjectId | null
+  locationId?: ObjectId | null
+  scopeLabel?: string
+  title: string
+  description?: string
+  /** Public short code for QR scan URL: /s/<shortCode>. Unique across all tenants. */
+  shortCode: string
+  status: "active" | "paused" | "archived"
+  questions: SurveyQuestion[]
+  collectContact: boolean
+  thankYouMessage?: string
+  scanCount: number
+  responseCount: number
+  lastResponseAt?: Date | null
+  createdBy: string
+}
+export const surveys = defineRepository<SurveyDoc>("surveys")
+
+export type SurveyAnswer = {
+  questionId: string
+  questionLabel: string
+  questionType: SurveyQuestionType
+  value: string | number | boolean | string[] | null
+}
+
+export type SurveyResponseDoc = TenantDoc & {
+  surveyId: ObjectId
+  branchId?: ObjectId | null
+  locationId?: ObjectId | null
+  answers: SurveyAnswer[]
+  overallRating?: number | null
+  npsScore?: number | null
+  respondent: { anonymous: boolean; name?: string; email?: string; phone?: string }
+  submittedAt: Date
+}
+export const surveyResponses = defineRepository<SurveyResponseDoc>("surveyResponses", {
   appendOnly: true,
 })

@@ -20,6 +20,7 @@ import {
   getTicketDetail,
   listSavedViews,
   queryTickets,
+  queryTicketsCursor,
 } from "@/server/modules/tickets"
 import { members } from "@/server/repositories"
 import { setupTestDb } from "@/test/db"
@@ -185,5 +186,84 @@ describe("Phase 3 ticketing core, assignment & notifications", () => {
     const views = await listSavedViews(ctx)
     expect(views).toHaveLength(1)
     expect(views[0].name).toBe("Urgent open")
+  })
+
+  it("supports backend keyset cursor scroll pagination, page=2 deep-links, filters, and cursor validation", async () => {
+    const { ctx, qr, cats } = await seedWorkspace()
+
+    // Create 12 distinct tickets concurrently (may share identical createdAt timestamps)
+    const created = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        submitFeedback(
+          qr.shortCode,
+          {
+            categoryId: cats[i % cats.length]._id.toHexString(),
+            description: `Scroll batch ticket #${i + 1}`,
+            rating: (i % 5) + 1,
+            consent: "on",
+          },
+          { ip: `10.10.0.${i + 1}`, limits: null, dedupe: false },
+        ),
+      ),
+    )
+    expect(created).toHaveLength(12)
+
+    // Walk every ticket via cursor pagination (pageSize=5 -> 5 + 5 + 2 = 12, zero duplicates)
+    const seen: string[] = []
+    let cursor: string | undefined
+    let loops = 0
+    while (true) {
+      const res = await queryTicketsCursor(ctx, { pageSize: 5, cursor })
+      seen.push(...res.items.map((t) => t._id.toHexString()))
+      loops++
+      if (!res.hasMore) {
+        expect(res.nextCursor).toBeNull()
+        break
+      }
+      expect(res.nextCursor).toBeTruthy()
+      cursor = res.nextCursor!
+      if (loops > 10) throw new Error("Infinite pagination loop")
+    }
+    expect(loops).toBe(3)
+    expect(seen).toHaveLength(12)
+    expect(new Set(seen).size).toBe(12)
+
+    // Deep-link `/tickets?page=2` returns slice 6..10 and continues to slice 11..12 via nextCursor
+    const p2 = await queryTicketsCursor(ctx, { page: 2, pageSize: 5 })
+    expect(p2.page).toBe(2)
+    expect(p2.total).toBe(12)
+    expect(p2.items).toHaveLength(5)
+    expect(p2.hasMore).toBe(true)
+    expect(p2.items.map((t) => t._id.toHexString())).toEqual(seen.slice(5, 10))
+
+    const p3 = await queryTicketsCursor(ctx, { pageSize: 5, cursor: p2.nextCursor! })
+    expect(p3.hasMore).toBe(false)
+    expect(p3.items.map((t) => t._id.toHexString())).toEqual(seen.slice(10, 12))
+
+    // Cursor combines safely with $or filters (unassigned + text search)
+    const filtered1 = await queryTicketsCursor(ctx, {
+      pageSize: 4,
+      assigneeId: "unassigned",
+      q: "Scroll batch",
+    })
+    expect(filtered1.total).toBe(12)
+    expect(filtered1.items).toHaveLength(4)
+    expect(filtered1.hasMore).toBe(true)
+    const filtered2 = await queryTicketsCursor(ctx, {
+      pageSize: 4,
+      assigneeId: "unassigned",
+      q: "Scroll batch",
+      cursor: filtered1.nextCursor!,
+    })
+    expect(filtered2.items).toHaveLength(4)
+    const overlap = filtered2.items.filter((t) =>
+      filtered1.items.some((prev) => prev._id.equals(t._id)),
+    )
+    expect(overlap).toHaveLength(0)
+
+    // Invalid cursor fails cleanly with VALIDATION
+    await expect(queryTicketsCursor(ctx, { cursor: "not-a-valid-cursor" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    })
   })
 })

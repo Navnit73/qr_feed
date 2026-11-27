@@ -7,7 +7,12 @@ import { members, roles } from "@/server/repositories"
 
 async function buildContext(
   userId: string,
-  member: { tenantId: ObjectId; roles: string[]; branchIds: ObjectId[] },
+  member: {
+    tenantId: ObjectId
+    roles: string[]
+    branchIds: ObjectId[]
+    menus?: string[] | null
+  },
 ): Promise<TenantContext> {
   const custom = member.roles.some((r) => r.startsWith("custom:"))
     ? await roles.unscoped().find({ tenantId: member.tenantId }).toArray()
@@ -19,6 +24,7 @@ async function buildContext(
     roles: member.roles,
     permissions: access.permissions,
     branchScope: access.branchScope,
+    menus: member.menus ? new Set(member.menus) : null,
   }
 }
 

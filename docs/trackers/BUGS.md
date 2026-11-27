@@ -37,6 +37,7 @@ workaround exists · **S4** cosmetic.
 | BUG-021 | `RatingInput` stars used `text-secondary` (nearly invisible on gray)                          | S3  | 2026-11-27 | 2026-11-27 | F-2.3, F-3.2 | Visual + T-UI-8            |
 | BUG-022 | Better Auth `INVALID_ORIGIN` on non-3000 dev ports & missing cookie clear on sign-out         | S2  | 2026-11-27 | 2026-11-27 | F-1.2        | `trustedOrigins` + T-E2E-4 |
 | BUG-023 | Missing i18n category keys (`consultation`, `wifi`, `washroom`, etc.) & Turnstile retry reset | S3  | 2026-11-27 | 2026-11-27 | F-2.7        | T-I18N-1                   |
+| BUG-024 | Settings tab bar disappeared on `/settings/*` sub-pages (Notifications, Billing, …)           | S4  | 2026-11-27 | 2026-11-27 | F-0.3        | T-E2E-7                    |
 | BUG-019 | `least_loaded` rule ran concurrent counts on one MongoDB 7 session                            | S2  | 2026-11-27 | 2026-11-27 | F-3.6        | T-AUD-3                    |
 | BUG-020 | `monthlyTickets` plan limit not enforced on intake or manual tickets                          | S2  | 2026-11-27 | 2026-11-27 | F-9.1        | T-AUD-3                    |
 | BUG-021 | `RatingInput` stars used `text-secondary` (nearly invisible on gray)                          | S3  | 2026-11-27 | 2026-11-27 | F-2.3, F-3.2 | Visual + T-UI-8            |
@@ -121,6 +122,17 @@ workaround exists · **S4** cosmetic.
   - **Audit Chain, SLA & State Machine:** `verifyChain()` now validates against `auditHeads` to catch tail truncation; `localToUtc` two-step DST convergence fixed `America/Los_Angeles` and `Pacific/Auckland` SLA deadlines; `sweepSlaEscalations` runs cursor-based transactional escalations with accurate L2/L3 windows; `transitionTicket` guards unknown events and resumes SLA when reassigning `on_hold` tickets.
   - **Frontend & Accessibility:** Eliminated `AuditChecklistRunner` `localStorage` hydration mismatch via `useSyncExternalStore`, fixed `PhotoUpload` object URL leaks, `CommandSearch` stuck loading & abort, `NotificationBell` unread sync & mark-read, ticket pagination filter preservation, `TagsEditor` feedback, `RCA` approver-only access, `print/*` light-mode & evidence rendering, and `useSweetAlert()` confirmations on destructive actions.
 - **Regression tests:** `sla-calculator.test.ts`, `ticket-state-machine.test.ts`, `image-sanitize.test.ts`, `audit-log.int.test.ts`, `platform.int.test.ts`, `sla.int.test.ts`, `members.int.test.ts`, `rca-capa.int.test.ts`, `reports.int.test.ts`.
+
+---
+
+## BUG-024 · Settings tabs vanish on sub-pages
+
+- **Steps:** open `/settings`, click Notifications (or Branding, Billing, API & Webhooks, Data & Privacy).
+- **Expected:** the same tab bar stays, with the clicked tab highlighted.
+- **Actual:** the sub-page rendered only its own header; every tab was gone.
+- **Cause:** the tab list and `<nav>` lived inline in `settings/page.tsx`, so `/settings/*` routes never rendered them.
+- **Fix:** `settings/settings-nav.tsx` exports `settingsTabs(ctx)` (permission-filtered list) and `<SettingsNav active>`; every settings page renders it under its `PageHeader`. Active tab carries `aria-current="page"`.
+- **Test:** `full-lifecycle.spec.ts` › "RCA/CAPA, standalone audit, analytics, settings and launch pages work end to end".
 
 ---
 

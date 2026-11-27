@@ -14,6 +14,7 @@ import {
   RevokeKeyButton,
   WebhookRowActions,
 } from "./integrations-controls"
+import { SettingsNav, settingsTabs } from "../settings-nav"
 
 export const metadata: Metadata = { title: "API & Integrations · QR Feed" }
 
@@ -38,6 +39,7 @@ export default async function IntegrationsPage() {
           { label: "Integrations" },
         ]}
       />
+      <SettingsNav tabs={settingsTabs(ctx)} active="integrations" />
 
       <div className="space-y-6">
         <PanelCard

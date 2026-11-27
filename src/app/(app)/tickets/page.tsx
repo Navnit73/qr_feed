@@ -12,10 +12,15 @@ import { listBranches } from "@/server/modules/branches"
 import { listCategories } from "@/server/modules/categories"
 import { ticketStats } from "@/server/modules/intake"
 import { getTenant } from "@/server/modules/tenants"
-import { listAssignableMembers, listSavedViews, queryTickets } from "@/server/modules/tickets"
+import {
+  listAssignableMembers,
+  listSavedViews,
+  queryTicketsCursor,
+  serializeTicketRow,
+} from "@/server/modules/tickets"
 import { can } from "@/server/rbac/ability"
 import { locations } from "@/server/repositories"
-import { NewTicketDialog, TicketBoard, type TicketRow } from "./ticket-controls"
+import { NewTicketDialog, TicketBoard } from "./ticket-controls"
 
 export const metadata: Metadata = { title: "Tickets · QR Feed" }
 
@@ -41,10 +46,11 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
     q: str(sp.q),
   }
 
+  const pageSize = view === "kanban" ? 60 : 25
   const tenant = await getTenant(ctx.tenantId)
-  const [{ items, meta }, stats, branchDocs, categoryDocs, memberDocs, locationDocs, savedViews] =
+  const [ticketPage, stats, branchDocs, categoryDocs, memberDocs, locationDocs, savedViews] =
     await Promise.all([
-      queryTickets(ctx, { ...filters, page, pageSize: view === "kanban" ? 60 : 25 }),
+      queryTicketsCursor(ctx, { ...filters, page, pageSize }),
       ticketStats(ctx),
       can(ctx, "branch:read") ? listBranches(ctx) : [],
       listCategories(ctx, tenant?.industry ?? "other"),
@@ -57,25 +63,9 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
 
   // eslint-disable-next-line react-hooks/purity -- single server render per request
   const now = Date.now()
-  const rows: TicketRow[] = items.map((t) => ({
-    id: t._id.toHexString(),
-    number: t.number,
-    locationName: t.locationPath.at(-1) ?? "",
-    locationParent: t.locationPath.slice(0, -1).join(" › "),
-    categoryName: t.categoryName,
-    description: t.description,
-    severity: t.severity,
-    status: t.status,
-    rating: t.rating,
-    reportCount: t.reportCount,
-    assigneeName: t.assignee?.name ?? null,
-    currentLevel: t.currentLevel ?? 1,
-    slaBreached: Boolean(t.sla?.breached),
-    slaPausedAt: t.sla?.pausedAt ? t.sla.pausedAt.toISOString() : null,
-    slaResolvedAt: t.sla?.resolvedAt ? t.sla.resolvedAt.toISOString() : null,
-    resolveDueAt: t.sla?.resolveDueAt ? t.sla.resolveDueAt.toISOString() : null,
-    createdAt: t.createdAt.toISOString(),
-  }))
+  const rows = ticketPage.items.map(serializeTicketRow)
+  const totalCount = ticketPage.total ?? rows.length
+  const boardKey = JSON.stringify({ ...filters, view, page })
 
   const branchOptions = branchDocs.map((b) => ({ value: b._id.toHexString(), label: b.name }))
   const categoryOptions = categoryDocs.map((c) => ({ value: c._id.toHexString(), label: c.label }))
@@ -87,16 +77,6 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
   }))
 
   const hasFilters = Object.values(filters).some(Boolean)
-
-  function pageHref(targetPage: number) {
-    const qs = new URLSearchParams()
-    for (const [k, v] of Object.entries(filters)) {
-      if (v) qs.set(k, v)
-    }
-    if (view === "kanban") qs.set("view", "kanban")
-    qs.set("page", String(targetPage))
-    return `?${qs.toString()}`
-  }
 
   return (
     <>
@@ -126,7 +106,7 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
         <StatCard label="Average rating (30 days)" value={stats.avgRating ?? "–"} icon="rating" />
       </div>
 
-      {items.length === 0 && !hasFilters ? (
+      {rows.length === 0 && !hasFilters && page === 1 ? (
         <EmptyState
           icon="qr"
           title="No tickets yet"
@@ -139,7 +119,13 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
         />
       ) : (
         <TicketBoard
+          key={boardKey}
           items={rows}
+          initialNextCursor={ticketPage.nextCursor}
+          initialHasMore={ticketPage.hasMore}
+          totalCount={totalCount}
+          initialPage={ticketPage.page}
+          pageSize={pageSize}
           view={view}
           filters={filters}
           branches={branchOptions}
@@ -156,32 +142,6 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
           canClose={can(ctx, "ticket:close")}
           now={now}
         />
-      )}
-
-      {meta.totalPages > 1 && view === "table" && (
-        <nav aria-label="Pagination" className="mt-4 flex items-center justify-between text-sm">
-          <span className="text-muted-foreground tabular-nums">
-            Page {meta.page} of {meta.totalPages} ({meta.total} tickets)
-          </span>
-          <span className="flex gap-2">
-            {meta.page > 1 && (
-              <Link
-                href={pageHref(meta.page - 1)}
-                className={buttonVariants({ variant: "outline", size: "lg" })}
-              >
-                Newer
-              </Link>
-            )}
-            {meta.page < meta.totalPages && (
-              <Link
-                href={pageHref(meta.page + 1)}
-                className={buttonVariants({ variant: "outline", size: "lg" })}
-              >
-                Older
-              </Link>
-            )}
-          </span>
-        </nav>
       )}
     </>
   )

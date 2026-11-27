@@ -21,3 +21,23 @@ export const SEVERITY_COLOR: Record<Severity, string> = {
 export function statusLabel(status: string) {
   return status.replaceAll("_", " ")
 }
+
+export type TicketRow = {
+  id: string
+  number: string
+  locationName: string
+  locationParent: string
+  categoryName: string
+  description: string
+  severity: Severity
+  status: string
+  rating: number | null
+  reportCount: number
+  assigneeName: string | null
+  currentLevel: number
+  slaBreached: boolean
+  slaPausedAt: string | null
+  slaResolvedAt: string | null
+  resolveDueAt: string | null
+  createdAt: string
+}

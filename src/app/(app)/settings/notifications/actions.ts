@@ -19,6 +19,7 @@ export async function savePrefsAction(_: ActionState, form: FormData): Promise<A
       },
       events: {
         assigned: raw.ev_assigned === "on",
+        newTicket: raw.ev_newTicket === "on",
         escalated: raw.ev_escalated === "on",
         verification: raw.ev_verification === "on",
         capaDue: raw.ev_capaDue === "on",

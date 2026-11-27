@@ -9,6 +9,7 @@ import { getBillingSummary } from "@/server/modules/platform"
 import { PLAN_CATALOG, type PlanKey } from "@/server/modules/tenants"
 import { can } from "@/server/rbac/ability"
 import { SelectPlanButton } from "./billing-controls"
+import { SettingsNav, settingsTabs } from "../settings-nav"
 
 export const metadata: Metadata = { title: "Billing & Plans · QR Feed" }
 
@@ -32,6 +33,7 @@ export default async function BillingPage() {
           { label: "Billing" },
         ]}
       />
+      <SettingsNav tabs={settingsTabs(ctx)} active="billing" />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard

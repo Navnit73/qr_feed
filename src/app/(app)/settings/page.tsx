@@ -6,7 +6,6 @@ import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { SEVERITY_BADGE } from "@/lib/ticket-display"
-import { cn } from "@/lib/utils"
 import { requireTenantContext } from "@/server/auth/session"
 import { listAssignmentRules } from "@/server/modules/assignment"
 import { listBranches } from "@/server/modules/branches"
@@ -27,6 +26,7 @@ import {
   EditCategoryDialog,
   RunSweepButton,
 } from "./settings-forms"
+import { SettingsNav, settingsTabs } from "./settings-nav"
 
 export const metadata: Metadata = { title: "Settings · QR Feed" }
 
@@ -46,62 +46,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
     redirect("/dashboard")
   }
 
-  const tabs = [
-    ...(canManageSla || canManageSettings || canManageTenant
-      ? [{ key: "sla", label: "SLA & Escalation", href: "/settings?tab=sla", inline: true }]
-      : []),
-    ...(canManageSettings || can(ctx, "ticket:assign")
-      ? [
-          {
-            key: "assignment",
-            label: "Assignment rules",
-            href: "/settings?tab=assignment",
-            inline: true,
-          },
-        ]
-      : []),
-    ...(canManageSettings || canManageTenant
-      ? [
-          {
-            key: "categories",
-            label: "Categories",
-            href: "/settings?tab=categories",
-            inline: true,
-          },
-          {
-            key: "automation",
-            label: "Automation",
-            href: "/settings?tab=automation",
-            inline: true,
-          },
-        ]
-      : []),
-    {
-      key: "notifications",
-      label: "Notifications",
-      href: "/settings/notifications",
-      inline: false,
-    },
-    ...(canManageTenant
-      ? [{ key: "branding", label: "Branding", href: "/settings/branding", inline: false }]
-      : []),
-    ...(canBill
-      ? [{ key: "billing", label: "Billing & Plan", href: "/settings/billing", inline: false }]
-      : []),
-    ...(canManageSettings
-      ? [
-          {
-            key: "integrations",
-            label: "API & Webhooks",
-            href: "/settings/integrations",
-            inline: false,
-          },
-        ]
-      : []),
-    ...(canManageTenant
-      ? [{ key: "privacy", label: "Data & Privacy", href: "/settings/privacy", inline: false }]
-      : []),
-  ]
+  const tabs = settingsTabs(ctx)
 
   const inlineKeys = tabs.filter((t) => t.inline).map((t) => t.key)
   if (inlineKeys.length === 0) {
@@ -157,25 +102,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Settings" }]}
       />
 
-      <nav aria-label="Settings sections" className="mb-6 flex flex-wrap gap-1.5 border-b pb-3">
-        {tabs.map((t) => {
-          const active = t.href.startsWith("/settings?tab=") && tab === t.key
-          return (
-            <Link
-              key={t.key}
-              href={t.href}
-              className={cn(
-                "rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                active
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
-              )}
-            >
-              {t.label}
-            </Link>
-          )
-        })}
-      </nav>
+      <SettingsNav tabs={tabs} active={tab} />
 
       {tab === "sla" && (
         <div className="space-y-6">

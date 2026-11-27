@@ -162,6 +162,24 @@ test("RCA/CAPA, standalone audit, analytics, settings and launch pages work end 
   await expect(
     page.getByRole("heading", { level: 1, name: "Billing & Subscription" }),
   ).toBeVisible()
+  // BUG-024: sub-pages keep the full Settings tab bar, with the current tab marked.
+  const settingsNav = page.getByRole("navigation", { name: "Settings sections" })
+  await expect(settingsNav.getByRole("link", { name: "Billing & Plan" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  )
+  await expect(settingsNav.getByRole("link", { name: "SLA & Escalation" })).toBeVisible()
+  await settingsNav.getByRole("link", { name: "Notifications" }).click()
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Notification preferences" }),
+  ).toBeVisible()
+  await expect(
+    page
+      .getByRole("navigation", { name: "Settings sections" })
+      .filter({ visible: true })
+      .getByRole("link", { name: "Notifications" }),
+  ).toHaveAttribute("aria-current", "page")
+  await page.goto("/settings/billing")
   await page.getByRole("button", { name: "Switch to growth" }).click()
   await expect(page.getByText("Growth", { exact: true }).first()).toBeVisible()
 

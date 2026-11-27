@@ -67,5 +67,23 @@ describe("Phase 10 public intake burst load test (F-10.3)", () => {
     const rejectedCount = spamResults.filter((r) => r.status === "rejected").length
     expect(okCount).toBe(5)
     expect(rejectedCount).toBe(3)
+
+    // High-concurrency distinct burst (50 concurrent pushes, dedupe disabled) yields 50 unique ticket numbers
+    const highBurst = await Promise.all(
+      Array.from({ length: 50 }, (_, i) =>
+        submitFeedback(
+          qrs[i % qrs.length].shortCode,
+          {
+            categoryId: cats[i % cats.length]._id.toHexString(),
+            description: `High concurrency distinct #${i + 1}`,
+            rating: (i % 5) + 1,
+            consent: "on",
+          },
+          { ip: `10.1.0.${i + 1}`, limits: null, dedupe: false },
+        ),
+      ),
+    )
+    expect(new Set(highBurst.map((b) => b.number)).size).toBe(50)
+    expect(highBurst.every((b) => !b.duplicate)).toBe(true)
   })
 })

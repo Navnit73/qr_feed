@@ -9,7 +9,11 @@ import { nextSequence } from "@/server/db/counters"
 import type { TenantContext } from "@/server/db/tenant-context"
 import { withTransaction } from "@/server/db/transaction"
 import { pickAssignee } from "@/server/modules/assignment"
-import { notifyReporterConfirmation, notifyUser } from "@/server/modules/notifications"
+import {
+  membersWhoCan,
+  notifyReporterConfirmation,
+  notifyUser,
+} from "@/server/modules/notifications"
 import { dispatchWebhookEvent } from "@/server/modules/platform"
 import { resolvePublicQr } from "@/server/modules/qr-codes"
 import { computeInitialTicketSla } from "@/server/modules/sla"
@@ -92,6 +96,8 @@ export type IntakeOptions = {
   /** null turns rate limiting off (tests, e2e). */
   limits?: { perIp: number; perQr: number; windowMs: number } | null
   turnstile?: { secret?: string; token?: string | null }
+  /** Whether to merge repeat open reports at the same spot within 2h. Defaults to true. */
+  dedupe?: boolean
 }
 
 /**
@@ -149,18 +155,23 @@ export async function submitFeedback(
     urgency: input.urgency,
   }
 
+  let allocatedSeq: number | undefined
+  const shouldDedupe = opts.dedupe !== false
+
   const result = await withTransaction(async (session) => {
     const repo = tickets.forTenant(sys)
     const now = new Date()
-    const open = await repo.findOne(
-      {
-        locationId: pub.locationId,
-        categoryId,
-        status: { $in: OPEN_TICKET_STATUSES },
-        createdAt: { $gte: new Date(now.getTime() - DEDUPE_WINDOW_MS) },
-      },
-      { session, sort: { createdAt: -1 } },
-    )
+    const open = shouldDedupe
+      ? await repo.findOne(
+          {
+            locationId: pub.locationId,
+            categoryId,
+            status: { $in: OPEN_TICKET_STATUSES },
+            createdAt: { $gte: new Date(now.getTime() - DEDUPE_WINDOW_MS) },
+          },
+          { session, sort: { createdAt: -1 } },
+        )
+      : null
 
     if (open) {
       const nextSeverity = maxSeverity(open.severity, severity)
@@ -196,8 +207,10 @@ export async function submitFeedback(
     await assertWithinLimit(sys, "monthlyTickets", monthlyCount, session)
 
     const year = now.getUTCFullYear()
-    const seq = await nextSequence(`${pub.tenantId.toHexString()}:tickets:${year}`, session)
-    const number = `TKT-${year}-${String(seq).padStart(6, "0")}`
+    // Allocate the sequence atomically outside the transaction so concurrent submissions don't
+    // serialize on a single counter document lock across the full transaction RTT.
+    allocatedSeq ??= await nextSequence(`${pub.tenantId.toHexString()}:tickets:${year}`)
+    const number = `TKT-${year}-${String(allocatedSeq).padStart(6, "0")}`
     const anonymous = !input.name && !input.email && !input.phone
     const autoAssignee = await pickAssignee(
       sys,
@@ -290,15 +303,44 @@ export async function submitFeedback(
     }
   }
 
-  // Notify auto-assigned staff member
-  if ("assignee" in result && result.assignee) {
-    await notifyUser(sys, {
-      userId: result.assignee.userId,
-      type: "ticket.assigned",
+  // A new ticket goes to whoever it was auto-assigned to; if nobody, to the people who can
+  // assign it in that branch, so it doesn't sit unseen. Merged repeat reports aren't news.
+  if (!result.duplicate) {
+    const notice = {
       title: `New ticket ${result.number} · ${category.label}`,
-      body: `${pub.locationPath.join(" › ")}${report.description ? `: ${report.description.slice(0, 140)}` : ""}`,
+      body: report.description
+        ? report.description.slice(0, 280)
+        : `${category.label} reported at ${pub.locationPath.join(" › ")}.`,
       href: `/tickets/${result.ticketId.toHexString()}`,
-    })
+      details: [
+        ["Ticket", result.number],
+        ["Location", `${pub.branchName} › ${pub.locationPath.join(" › ")}`],
+        ["Issue", category.label],
+        ["Priority", severity],
+        ...(report.rating ? [["Rating", `${report.rating}/5`]] : []),
+      ] as [string, string][],
+    }
+    if ("assignee" in result && result.assignee) {
+      await notifyUser(sys, {
+        ...notice,
+        userId: result.assignee.userId,
+        type: "ticket.assigned",
+        cta: "Open ticket",
+      })
+    } else {
+      const assigners = await membersWhoCan(sys, ["ticket:assign"], pub.branchId)
+      await Promise.allSettled(
+        assigners.map((m) =>
+          notifyUser(sys, {
+            ...notice,
+            userId: m.userId,
+            type: "ticket.created",
+            body: `Nobody was auto-assigned. ${notice.body}`,
+            cta: "Assign ticket",
+          }),
+        ),
+      )
+    }
   }
 
   // Reporter email/SMS confirmation if contact was provided (F-2.5 / P3 notifications)

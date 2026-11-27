@@ -3,7 +3,15 @@
 import Form from "next/form"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useActionState, useEffect, useState, useTransition } from "react"
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react"
 import { FormField, FormMessage, FormSelect, FormTextarea, SubmitButton } from "@/components/form"
 import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
@@ -12,7 +20,8 @@ import { SlaChip } from "@/components/sla-chip"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { SEVERITY_BADGE, statusLabel } from "@/lib/ticket-display"
+import { apiFetch } from "@/lib/api/client"
+import { SEVERITY_BADGE, statusLabel, type TicketRow } from "@/lib/ticket-display"
 import { timeAgo } from "@/lib/relative-time"
 import { cn } from "@/lib/utils"
 import {
@@ -23,24 +32,16 @@ import {
   quickTransitionAction,
 } from "./actions"
 
-export type TicketRow = {
-  id: string
-  number: string
-  locationName: string
-  locationParent: string
-  categoryName: string
-  description: string
-  severity: "low" | "medium" | "high" | "critical"
-  status: string
-  rating: number | null
-  reportCount: number
-  assigneeName: string | null
-  currentLevel: number
-  slaBreached: boolean
-  slaPausedAt: string | null
-  slaResolvedAt: string | null
-  resolveDueAt: string | null
-  createdAt: string
+export type { TicketRow }
+
+type TicketsScrollPayload = {
+  items: TicketRow[]
+  nextCursor: string | null
+  hasMore: boolean
+  total?: number
+  page: number
+  pageSize: number
+  now: number
 }
 
 export type FilterOption = { value: string; label: string }
@@ -222,6 +223,11 @@ function SaveViewForm({
 
 export function TicketBoard({
   items,
+  initialNextCursor = null,
+  initialHasMore = false,
+  totalCount,
+  initialPage = 1,
+  pageSize = 25,
   view,
   filters,
   branches,
@@ -234,6 +240,11 @@ export function TicketBoard({
   now,
 }: {
   items: TicketRow[]
+  initialNextCursor?: string | null
+  initialHasMore?: boolean
+  totalCount?: number
+  initialPage?: number
+  pageSize?: number
   view: "table" | "kanban"
   filters: Record<string, string | undefined>
   branches: FilterOption[]
@@ -246,16 +257,119 @@ export function TicketBoard({
   now: number
 }) {
   const router = useRouter()
+  const [extraRows, setExtraRows] = useState<TicketRow[]>([])
+  const [nextCursor, setNextCursor] = useState<string | null>(initialNextCursor)
+  const [hasMore, setHasMore] = useState<boolean>(initialHasMore)
+  const [total, setTotal] = useState<number>(totalCount ?? items.length)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [currentNow, setCurrentNow] = useState(now)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [saveOpen, setSaveOpen] = useState(false)
   const [viewErr, setViewErr] = useState<string | null>(null)
   const [bulkMode, setBulkMode] = useState<"assign" | "cancel">("assign")
   const [kanbanPendingId, setKanbanPendingId] = useState<string | null>(null)
   const [, startKanbanTransition] = useTransition()
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const loadingRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
+
+  const rows = useMemo(() => {
+    if (extraRows.length === 0) return items
+    const byId = new Map<string, TicketRow>()
+    for (const item of items) byId.set(item.id, item)
+    for (const item of extraRows) {
+      if (!byId.has(item.id)) byId.set(item.id, item)
+    }
+    return [...byId.values()]
+  }, [items, extraRows])
+
+  const resetScrollBuffer = useCallback(() => {
+    abortRef.current?.abort()
+    loadingRef.current = false
+    setLoadingMore(false)
+    setLoadError(null)
+    setExtraRows([])
+    setNextCursor(initialNextCursor)
+    setHasMore(initialHasMore)
+  }, [initialHasMore, initialNextCursor])
+
+  const loadMore = useCallback(async () => {
+    if (loadingRef.current || !hasMore || !nextCursor) return
+    loadingRef.current = true
+    setLoadingMore(true)
+    setLoadError(null)
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    const qs = new URLSearchParams()
+    qs.set("cursor", nextCursor)
+    qs.set("pageSize", String(pageSize))
+    for (const [k, v] of Object.entries(filters)) {
+      if (v && v !== "all") qs.set(k, v)
+    }
+
+    try {
+      const res = await apiFetch<TicketsScrollPayload>(`/api/tickets?${qs.toString()}`, {
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted) return
+      if (!res.ok) {
+        setLoadError(res.error.message)
+        return
+      }
+      const incoming = res.data.items
+      if (incoming.length > 0) {
+        setExtraRows((prev) => {
+          const seen = new Set(prev.map((r) => r.id))
+          const unique = incoming.filter((r) => !seen.has(r.id))
+          return unique.length > 0 ? [...prev, ...unique] : prev
+        })
+      }
+      setNextCursor(res.data.nextCursor)
+      setHasMore(res.data.hasMore)
+      setCurrentNow(res.data.now)
+      if (typeof res.data.total === "number") setTotal(res.data.total)
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null
+        loadingRef.current = false
+        setLoadingMore(false)
+      }
+    }
+  }, [filters, hasMore, nextCursor, pageSize])
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || !hasMore || !nextCursor || loadingMore || loadError) return
+    if (typeof IntersectionObserver === "undefined") return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMore()
+        }
+      },
+      { rootMargin: "320px 0px" },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasMore, loadError, loadMore, loadingMore, nextCursor])
+
   const [bulkState, bulkFormAction] = useActionState(
     async (prev: Awaited<ReturnType<typeof bulkTicketAction>>, fd: FormData) => {
       const res = await bulkTicketAction(prev, fd)
-      if (res?.ok) setSelected(new Set())
+      if (res?.ok) {
+        setSelected(new Set())
+        resetScrollBuffer()
+      }
       return res
     },
     null,
@@ -268,13 +382,14 @@ export function TicketBoard({
       try {
         const res = await quickTransitionAction(id, { type })
         if (res && !res.ok) setViewErr(res.error.message)
+        else if (extraRows.length > 0) resetScrollBuffer()
       } finally {
         setKanbanPendingId(null)
       }
     })
   }
 
-  const visibleIds = new Set(items.map((i) => i.id))
+  const visibleIds = new Set(rows.map((i) => i.id))
   const activeSelected = new Set([...selected].filter((id) => visibleIds.has(id)))
 
   function buildUrl(patch: Record<string, string | undefined>) {
@@ -297,9 +412,13 @@ export function TicketBoard({
   }
 
   function toggleAll() {
-    if (activeSelected.size === items.length) setSelected(new Set())
-    else setSelected(new Set(items.map((i) => i.id)))
+    if (activeSelected.size === rows.length) setSelected(new Set())
+    else setSelected(new Set(rows.map((i) => i.id)))
   }
+
+  const startRank = rows.length > 0 ? (initialPage - 1) * pageSize + 1 : 0
+  const endRank = rows.length > 0 ? startRank + rows.length - 1 : 0
+  const displayTotal = Math.max(total, endRank)
 
   const kanbanCols = [
     { key: "new", label: "New", statuses: ["new"] },
@@ -567,7 +686,7 @@ export function TicketBoard({
       {view === "kanban" ? (
         <div className="grid gap-4 overflow-x-auto pb-2 md:grid-cols-2 xl:grid-cols-3">
           {kanbanCols.map((col) => {
-            const colItems = items.filter((i) => col.statuses.includes(i.status))
+            const colItems = rows.filter((i) => col.statuses.includes(i.status))
             return (
               <section key={col.key} className="flex flex-col rounded-xl border bg-muted/30 p-3">
                 <header className="mb-3 flex items-center justify-between">
@@ -618,9 +737,9 @@ export function TicketBoard({
                                 pausedAt={t.slaPausedAt}
                                 resolvedAt={t.slaResolvedAt}
                                 breached={t.slaBreached}
-                                now={now}
+                                now={currentNow}
                               />
-                              <span>{timeAgo(new Date(t.createdAt), now)}</span>
+                              <span>{timeAgo(new Date(t.createdAt), currentNow)}</span>
                             </div>
                           </div>
                         </Link>
@@ -679,7 +798,7 @@ export function TicketBoard({
                     <input
                       type="checkbox"
                       aria-label="Select all tickets"
-                      checked={items.length > 0 && activeSelected.size === items.length}
+                      checked={rows.length > 0 && activeSelected.size === rows.length}
                       onChange={toggleAll}
                       className="size-4 accent-(--primary)"
                     />
@@ -709,98 +828,206 @@ export function TicketBoard({
               </tr>
             </thead>
             <tbody className="divide-y">
-              {items.map((t) => (
-                <tr key={t.id} className="align-top hover:bg-muted/30">
-                  {(canAssign || canClose) && (
-                    <td className="px-3 py-3">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${t.number}`}
-                        checked={activeSelected.has(t.id)}
-                        onChange={() => toggleOne(t.id)}
-                        className="size-4 accent-(--primary)"
-                      />
-                    </td>
-                  )}
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/tickets/${t.id}`}
-                      className="font-mono text-xs font-semibold whitespace-nowrap text-primary hover:underline"
-                    >
-                      {t.number}
-                    </Link>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {t.currentLevel > 1 && <Badge variant="warning">L{t.currentLevel}</Badge>}
-                      {t.reportCount > 1 && (
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          ×{t.reportCount}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="font-medium">{t.locationName}</span>
-                    {t.locationParent && (
-                      <span className="block text-xs text-muted-foreground">
-                        {t.locationParent}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Link href={`/tickets/${t.id}`} className="font-medium hover:underline">
-                      {t.categoryName}
-                    </Link>
-                    {t.description && (
-                      <span className="mt-1 line-clamp-2 block max-w-64 text-xs text-muted-foreground">
-                        {t.description}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                    {t.assigneeName ?? "Unassigned"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant={SEVERITY_BADGE[t.severity]} className="capitalize">
-                      {t.severity}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge
-                        variant={
-                          t.status === "new"
-                            ? "secondary"
-                            : t.status === "closed"
-                              ? "success"
-                              : t.status === "pending_verification"
-                                ? "info"
-                                : t.status === "on_hold"
-                                  ? "warning"
-                                  : "muted"
-                        }
-                        className="capitalize"
-                      >
-                        {statusLabel(t.status)}
-                      </Badge>
-                      <SlaChip
-                        createdAt={t.createdAt}
-                        resolveDueAt={t.resolveDueAt}
-                        pausedAt={t.slaPausedAt}
-                        resolvedAt={t.slaResolvedAt}
-                        breached={t.slaBreached}
-                        now={now}
-                      />
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                    {timeAgo(new Date(t.createdAt), now)}
+              {rows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={canAssign || canClose ? 8 : 7}
+                    className="px-4 py-10 text-center text-sm text-muted-foreground"
+                  >
+                    {initialPage > 1
+                      ? `No tickets found on page ${initialPage}.`
+                      : "No tickets match the current filters."}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                rows.map((t) => (
+                  <tr key={t.id} className="align-top hover:bg-muted/30">
+                    {(canAssign || canClose) && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${t.number}`}
+                          checked={activeSelected.has(t.id)}
+                          onChange={() => toggleOne(t.id)}
+                          className="size-4 accent-(--primary)"
+                        />
+                      </td>
+                    )}
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/tickets/${t.id}`}
+                        className="font-mono text-xs font-semibold whitespace-nowrap text-primary hover:underline"
+                      >
+                        {t.number}
+                      </Link>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {t.currentLevel > 1 && <Badge variant="warning">L{t.currentLevel}</Badge>}
+                        {t.reportCount > 1 && (
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            ×{t.reportCount}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="font-medium">{t.locationName}</span>
+                      {t.locationParent && (
+                        <span className="block text-xs text-muted-foreground">
+                          {t.locationParent}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link href={`/tickets/${t.id}`} className="font-medium hover:underline">
+                        {t.categoryName}
+                      </Link>
+                      {t.description && (
+                        <span className="mt-1 line-clamp-2 block max-w-64 text-xs text-muted-foreground">
+                          {t.description}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
+                      {t.assigneeName ?? "Unassigned"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant={SEVERITY_BADGE[t.severity]} className="capitalize">
+                        {t.severity}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge
+                          variant={
+                            t.status === "new"
+                              ? "secondary"
+                              : t.status === "closed"
+                                ? "success"
+                                : t.status === "pending_verification"
+                                  ? "info"
+                                  : t.status === "on_hold"
+                                    ? "warning"
+                                    : "muted"
+                          }
+                          className="capitalize"
+                        >
+                          {statusLabel(t.status)}
+                        </Badge>
+                        <SlaChip
+                          createdAt={t.createdAt}
+                          resolveDueAt={t.resolveDueAt}
+                          pausedAt={t.slaPausedAt}
+                          resolvedAt={t.slaResolvedAt}
+                          breached={t.slaBreached}
+                          now={currentNow}
+                        />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
+                      {timeAgo(new Date(t.createdAt), currentNow)}
+                    </td>
+                  </tr>
+                ))
+              )}
+              {loadingMore &&
+                Array.from({ length: 3 }, (_, idx) => (
+                  <tr key={`skeleton-${idx}`} aria-hidden="true" className="animate-pulse">
+                    {(canAssign || canClose) && (
+                      <td className="px-3 py-3.5">
+                        <div className="size-4 rounded bg-muted" />
+                      </td>
+                    )}
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-28 rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-32 rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-48 rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-20 rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-5 w-16 rounded-full bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-5 w-24 rounded-full bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-16 rounded bg-muted" />
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
       )}
+
+      {/* Backend scroll pagination sentinel & status footer */}
+      <div
+        ref={sentinelRef}
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/60 px-4 py-3 text-sm"
+      >
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground tabular-nums">
+          {rows.length > 0 ? (
+            <span>
+              {initialPage > 1
+                ? `Showing ${startRank.toLocaleString()}–${endRank.toLocaleString()} of ${displayTotal.toLocaleString()} tickets`
+                : `Showing ${rows.length.toLocaleString()} of ${displayTotal.toLocaleString()} tickets`}
+            </span>
+          ) : (
+            <span>{displayTotal.toLocaleString()} tickets total</span>
+          )}
+          {!hasMore && rows.length > 0 && (
+            <span className="text-xs text-muted-foreground/80">· All loaded</span>
+          )}
+          {loadingMore && (
+            <span role="status" aria-live="polite" className="text-xs font-medium text-primary">
+              · Loading more tickets…
+            </span>
+          )}
+          {loadError && <span className="text-xs text-destructive">· {loadError}</span>}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {initialPage > 1 && (
+            <Link
+              href={buildUrl({})}
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              Back to newest
+            </Link>
+          )}
+          {loadError && hasMore && (
+            <Button type="button" variant="outline" size="sm" onClick={() => void loadMore()}>
+              Retry
+            </Button>
+          )}
+          {hasMore && !loadError && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              loading={loadingMore}
+              onClick={() => void loadMore()}
+            >
+              Load more
+            </Button>
+          )}
+          {rows.length > pageSize && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            >
+              Back to top
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

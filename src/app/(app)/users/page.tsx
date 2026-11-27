@@ -9,9 +9,10 @@ import { listInvites, listMembers } from "@/server/modules/members"
 import { listCustomRoles } from "@/server/modules/roles"
 import { can, canGrantRoles } from "@/server/rbac/ability"
 import { roleLabel } from "@/server/rbac/labels"
+import { CONFIGURABLE_MENUS, MENU_KEYS } from "@/server/rbac/menus"
 import { ALL_PERMISSIONS, SYSTEM_ROLES, type SystemRoleKey } from "@/server/rbac/permissions"
 import { CreateRoleDialog, CustomRoleActions } from "./role-dialogs"
-import { InviteDialog, MemberActions, RevokeInviteButton, type Option } from "./user-dialogs"
+import { AddUserDialog, MemberActions, RevokeInviteButton, type Option } from "./user-dialogs"
 
 export const metadata: Metadata = { title: "Users · QR Feed" }
 
@@ -51,6 +52,13 @@ export default async function UsersPage() {
     value: b._id.toHexString(),
     label: b.name,
   }))
+  const menuOptions: Option[] = CONFIGURABLE_MENUS.map((m) => ({
+    value: m.key,
+    label: m.label,
+    description: m.group,
+  }))
+  const menuLabel = new Map<string, string>(CONFIGURABLE_MENUS.map((m) => [m.key, m.label]))
+
   const grantablePermissions: Option[] = ALL_PERMISSIONS.filter((p) => ctx.permissions.has(p)).map(
     (p) => ({ value: p, label: p }),
   )
@@ -73,7 +81,9 @@ export default async function UsersPage() {
                 allowTenantScope={ctx.branchScope === "all"}
               />
             )}
-            {canInvite && <InviteDialog roles={roleOptions} branches={branchOptions} />}
+            {canInvite && (
+              <AddUserDialog roles={roleOptions} branches={branchOptions} menus={menuOptions} />
+            )}
           </>
         }
       />
@@ -111,6 +121,16 @@ export default async function UsersPage() {
                     {branchName.get(b.toHexString()) ?? "Branch"}
                   </Badge>
                 ))}
+                {m.menus && (
+                  <Badge
+                    variant="info"
+                    title={`Menus: ${["Dashboard", ...m.menus.map((k) => menuLabel.get(k) ?? k)].join(", ")}`}
+                  >
+                    {m.menus.length === 0
+                      ? "Dashboard only"
+                      : `${m.menus.length} ${m.menus.length === 1 ? "menu" : "menus"}`}
+                  </Badge>
+                )}
                 {m.status === "inactive" && <Badge variant="destructive">Inactive</Badge>}
               </div>
               {canManage &&
@@ -124,9 +144,11 @@ export default async function UsersPage() {
                       roles: m.roles,
                       branchIds: m.branchIds.map((b) => b.toHexString()),
                       phone: m.phone ?? "",
+                      menus: m.menus ?? MENU_KEYS,
                     }}
                     roles={roleOptions}
                     branches={branchOptions}
+                    menus={menuOptions}
                   />
                 )}
             </li>

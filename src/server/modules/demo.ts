@@ -20,7 +20,9 @@ import { createOrganization } from "@/server/modules/onboarding"
 import { generateMissingQrCodes, listQrCodes } from "@/server/modules/qr-codes"
 import { createCapa, createRca, updateRcaAnalysis } from "@/server/modules/rca-capa"
 import { createSlaPolicy } from "@/server/modules/sla"
+import { createSurvey, submitSurveyResponse } from "@/server/modules/surveys"
 import { applyTicketTransition, queryTickets } from "@/server/modules/tickets"
+import { SURVEY_TEMPLATES } from "@/lib/survey-templates"
 import { members } from "@/server/repositories"
 
 export const DEMO_ADMIN = {
@@ -486,6 +488,55 @@ export async function ensureDemoWorkspace(): Promise<{
       evidence: [],
     })
     await completeAudit(ctx, pastAudit._id)
+
+    // Seed a ready-to-scan Patient Satisfaction Survey with sample patient responses.
+    const patientTpl = SURVEY_TEMPLATES[0]
+    const demoSurvey = await createSurvey(ctx, {
+      title: patientTpl.title,
+      description: patientTpl.description,
+      branchId: branch._id.toHexString(),
+      collectContact: patientTpl.collectContact,
+      thankYouMessage: patientTpl.thankYouMessage,
+      questions: patientTpl.questions,
+    })
+    const sampleSurveyResponses = [
+      {
+        q_q_overall: "5",
+        q_q_nps: "10",
+        q_q_dept: "OPD / Consultation",
+        q_q_care: "5",
+        q_q_clean: "yes",
+        q_q_highlights: ["Polite & attentive staff", "Clear explanation by doctor"],
+        q_q_comments: "Dr. Rao explained every test clearly and the nurses were very warm.",
+        name: "Ananya Deshmukh",
+        consent: "on",
+      },
+      {
+        q_q_overall: "4",
+        q_q_nps: "9",
+        q_q_dept: "Diagnostics & Lab",
+        q_q_care: "5",
+        q_q_clean: "yes",
+        q_q_highlights: ["Clean & hygienic premises", "Short waiting time"],
+        q_q_comments: "Sample collection was quick and painless.",
+        consent: "on",
+      },
+      {
+        q_q_overall: "3",
+        q_q_nps: "6",
+        q_q_dept: "Pharmacy",
+        q_q_care: "4",
+        q_q_clean: "yes",
+        q_q_highlights: ["Polite & attentive staff"],
+        q_q_comments:
+          "Pharmacy counter had a 25-minute queue around noon; extra counter would help.",
+        name: "Rakesh Malhotra",
+        consent: "on",
+      },
+    ]
+    for (const resp of sampleSurveyResponses) {
+      await submitSurveyResponse(demoSurvey.shortCode, resp, { ip: "127.0.0.1", limits: null })
+    }
 
     return {
       email: DEMO_ADMIN.email,

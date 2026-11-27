@@ -24,6 +24,7 @@ import { RefreshButton } from "./refresh-button"
 export const metadata: Metadata = { title: "Dashboard · QR Feed" }
 
 type Tickets = NonNullable<Dashboard["tickets"]>
+type Surveys = NonNullable<Dashboard["surveys"]>
 type Workspace = Dashboard["workspace"]
 
 export default async function DashboardPage({ searchParams }: PageProps<"/dashboard">) {
@@ -34,10 +35,11 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
   const days = rawDays && [7, 14, 30, 90].includes(rawDays) ? rawDays : 14
 
   const [user, data] = await Promise.all([requireUser(), getDashboard(ctx, { branchId, days })])
-  const { workspace: ws, tickets: t } = data
+  const { workspace: ws, tickets: t, surveys: s } = data
   // eslint-disable-next-line react-hooks/purity -- a server render happens once per request
   const now = Date.now()
   const canManage = can(ctx, "location:manage")
+  const canCreateSurvey = can(ctx, "qr:create")
 
   return (
     <>
@@ -50,6 +52,11 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             {ws.branches !== null && (
               <Link href="/branches" className={buttonVariants({ variant: "outline", size: "lg" })}>
                 <Icon name="qr" data-icon="inline-start" /> QR codes
+              </Link>
+            )}
+            {s && (
+              <Link href="/surveys" className={buttonVariants({ variant: "outline", size: "lg" })}>
+                <Icon name="feedback" data-icon="inline-start" /> Surveys
               </Link>
             )}
             {t && (
@@ -72,6 +79,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
 
         {t ? <TicketKpis t={t} ws={ws} /> : <WorkspaceKpis ws={ws} />}
         {t && <SeverityShare t={t} />}
+        {s && <SurveyNpsSection s={s} days={data.filters.days} canCreate={canCreateSurvey} />}
 
         {t && (
           <>
@@ -384,6 +392,275 @@ function QuietState({ icon, text }: { icon: IconName; text: string }) {
       </span>
       {text}
     </div>
+  )
+}
+
+/** Custom surveys & patient/guest satisfaction (NPS, ratings, and active QR surveys). */
+function SurveyNpsSection({
+  s,
+  days,
+  canCreate,
+}: {
+  s: Surveys
+  days: number
+  canCreate: boolean
+}) {
+  const npsTone: Tone =
+    s.npsScore === null
+      ? "indigo"
+      : s.npsScore >= 50
+        ? "emerald"
+        : s.npsScore >= 0
+          ? "indigo"
+          : "rose"
+  const npsValue = s.npsScore === null ? "–" : `${s.npsScore > 0 ? "+" : ""}${s.npsScore}`
+  const npsBand =
+    s.npsScore === null
+      ? "No NPS scores yet"
+      : s.npsScore >= 70
+        ? "World-class"
+        : s.npsScore >= 50
+          ? "Excellent"
+          : s.npsScore >= 0
+            ? "Good"
+            : "Needs attention"
+  const conversionPct =
+    s.totalScans > 0 ? Math.min(100, Math.round((s.totalResponses / s.totalScans) * 100)) : null
+
+  return (
+    <section aria-labelledby="survey-nps-heading" className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 id="survey-nps-heading" className="text-base font-semibold tracking-tight">
+            Surveys &amp; Satisfaction (NPS)
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Net Promoter Score and ratings from custom QR surveys over the last {days} days.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/surveys" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            All surveys
+          </Link>
+          {canCreate && (
+            <Link href="/surveys/new" className={buttonVariants({ size: "sm" })}>
+              <Icon name="plus" data-icon="inline-start" /> New survey
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <StatCard
+          label="Net Promoter Score (NPS)"
+          value={npsValue}
+          icon="report"
+          tone={npsTone}
+          featured={s.npsScore !== null}
+          footer={
+            <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-muted-foreground">
+              <span className="font-medium text-foreground">{npsBand}</span>
+              {s.npsResponses > 0 && (
+                <span className="tabular-nums">
+                  · {s.npsResponses} {s.npsResponses === 1 ? "score" : "scores"}
+                </span>
+              )}
+              {s.npsDelta !== undefined && (
+                <span
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    s.npsDelta >= 0 ? "text-success" : "text-destructive",
+                  )}
+                >
+                  {s.npsDelta >= 0 ? `+${s.npsDelta}` : `−${Math.abs(s.npsDelta)}`} pts vs prior{" "}
+                  {days}d
+                </span>
+              )}
+            </p>
+          }
+        />
+
+        <StatCard
+          label="Survey star rating"
+          value={s.avgRating === null ? "–" : `${s.avgRating} / 5`}
+          icon="rating"
+          tone="amber"
+          footer={
+            <p className="text-muted-foreground tabular-nums">
+              {s.ratedResponses > 0
+                ? `Across ${s.ratedResponses} rated ${s.ratedResponses === 1 ? "response" : "responses"} (${days}d)`
+                : `No star ratings in last ${days} days`}
+            </p>
+          }
+        />
+
+        <StatCard
+          label={`Survey responses (${days}d)`}
+          value={s.responsesInRange}
+          icon="feedback"
+          tone="cyan"
+          delta={s.responsesDelta}
+          deltaLabel={`vs prior ${days}d`}
+          footer={
+            <p className="text-muted-foreground tabular-nums">
+              <span className="font-medium text-foreground">{s.activeSurveys}</span> active{" "}
+              {s.activeSurveys === 1 ? "survey" : "surveys"} · {s.totalScans.toLocaleString()} QR
+              scans
+              {conversionPct !== null ? ` (${conversionPct}% response rate)` : ""}
+            </p>
+          }
+        />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <PanelCard
+          title="NPS breakdown"
+          description={`Promoters, passives & detractors (last ${days}d)`}
+        >
+          {s.npsResponses === 0 ? (
+            <QuietState
+              icon="report"
+              text="Scan a survey QR with an NPS (0–10) question to populate this breakdown."
+            />
+          ) : (
+            <div className="space-y-4">
+              <DonutChart
+                title="Survey NPS breakdown"
+                centerLabel="scores"
+                data={[
+                  {
+                    key: "promoters",
+                    label: "Promoters (9–10)",
+                    value: s.promoters,
+                    color: "var(--success)",
+                  },
+                  {
+                    key: "passives",
+                    label: "Passives (7–8)",
+                    value: s.passives,
+                    color: "var(--warning)",
+                  },
+                  {
+                    key: "detractors",
+                    label: "Detractors (0–6)",
+                    value: s.detractors,
+                    color: "var(--destructive)",
+                  },
+                ]}
+              />
+              <div className="grid grid-cols-3 gap-2 text-center text-xs tabular-nums">
+                <div className="rounded-lg border bg-emerald-500/10 px-2 py-1.5">
+                  <p className="font-semibold text-emerald-700 dark:text-emerald-400">
+                    {Math.round((s.promoters / s.npsResponses) * 100)}%
+                  </p>
+                  <p className="text-muted-foreground">Promoters</p>
+                </div>
+                <div className="rounded-lg border bg-amber-500/10 px-2 py-1.5">
+                  <p className="font-semibold text-amber-700 dark:text-amber-400">
+                    {Math.round((s.passives / s.npsResponses) * 100)}%
+                  </p>
+                  <p className="text-muted-foreground">Passives</p>
+                </div>
+                <div className="rounded-lg border bg-destructive/10 px-2 py-1.5">
+                  <p className="font-semibold text-destructive">
+                    {Math.round((s.detractors / s.npsResponses) * 100)}%
+                  </p>
+                  <p className="text-muted-foreground">Detractors</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </PanelCard>
+
+        <PanelCard
+          className="lg:col-span-2"
+          title="Custom surveys & QR forms"
+          description="Live satisfaction scores and scan counts by survey"
+          action={
+            <Link href="/surveys" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+              Manage <Icon name="arrowRight" data-icon="inline-end" />
+            </Link>
+          }
+        >
+          {s.topSurveys.length === 0 ? (
+            <EmptyState
+              icon="feedback"
+              title="Launch your first satisfaction survey"
+              description="Create a Patient Satisfaction or Guest Feedback form, print its QR poster, and track NPS live on this dashboard."
+              action={
+                canCreate ? (
+                  <Link href="/surveys/new" className={buttonVariants({ size: "lg" })}>
+                    <Icon name="plus" data-icon="inline-start" /> Create survey
+                  </Link>
+                ) : undefined
+              }
+            />
+          ) : (
+            <ul className="-my-2 divide-y">
+              {s.topSurveys.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex flex-wrap items-center justify-between gap-3 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link
+                        href={`/surveys/${item.id}`}
+                        className="truncate font-medium hover:text-primary hover:underline"
+                      >
+                        {item.title}
+                      </Link>
+                      <Badge
+                        variant={item.status === "active" ? "success" : "warning"}
+                        className="capitalize"
+                      >
+                        {item.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                      {item.scopeLabel ? `${item.scopeLabel} · ` : ""}
+                      {item.scans.toLocaleString()} scans · {item.responses.toLocaleString()}{" "}
+                      {item.responses === 1 ? "response" : "responses"}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    {item.avgRating !== null && (
+                      <Badge variant="secondary" className="tabular-nums">
+                        {item.avgRating} ★
+                      </Badge>
+                    )}
+                    {item.nps !== null && (
+                      <Badge
+                        variant={
+                          item.nps >= 50 ? "success" : item.nps >= 0 ? "info" : "destructive"
+                        }
+                        className="tabular-nums"
+                      >
+                        NPS {item.nps > 0 ? `+${item.nps}` : item.nps}
+                      </Badge>
+                    )}
+                    <a
+                      href={`/s/${item.shortCode}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      Open form
+                    </a>
+                    <Link
+                      href={`/surveys/${item.id}`}
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      Details →
+                    </Link>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </PanelCard>
+      </div>
+    </section>
   )
 }
 

@@ -12,7 +12,11 @@ import type { TenantContext } from "@/server/db/tenant-context"
 import { env } from "@/server/env"
 import type { SessionUser } from "@/server/modules/onboarding"
 import { getTenant } from "@/server/modules/tenants"
+import { canSeePath } from "@/server/rbac/menus"
 import { ALL_PERMISSIONS } from "@/server/rbac/permissions"
+
+/** Set by `src/proxy.ts` on every app request, so server code knows which page is rendering. */
+export const PATHNAME_HEADER = "x-qrf-pathname"
 
 /** Which organisation the user is working in. Membership is re-checked on every request. */
 export const TENANT_COOKIE = "qrf_tenant"
@@ -142,6 +146,11 @@ export async function requireTenantContext(): Promise<TenantContext> {
   await requireUser()
   const ctx = await getTenantContext()
   if (!ctx) redirect("/onboarding")
+  // A member whose admin switched a menu off can't reach its pages by URL either.
+  if (ctx.menus) {
+    const pathname = (await headers()).get(PATHNAME_HEADER)
+    if (pathname && !canSeePath(ctx, pathname)) redirect("/dashboard")
+  }
   return ctx
 }
 

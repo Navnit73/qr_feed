@@ -28,6 +28,7 @@ import { listNotifications, unreadNotificationCount } from "@/server/modules/not
 import { getTenant } from "@/server/modules/tenants"
 import { can } from "@/server/rbac/ability"
 import { roleLabel } from "@/server/rbac/labels"
+import { visibleMenus } from "@/server/rbac/menus"
 import { branches, locations, members, roles, tickets } from "@/server/repositories"
 
 /*
@@ -124,49 +125,16 @@ const getShellData = cache(async (): Promise<ShellPayload> => {
 
   const customNames = new Map(customRoles.map((r) => [r._id.toHexString(), r.name]))
 
-  // The UI hides what you can't do; the server checks again on every action.
-  const nav: NavItem[] = [
-    { href: "/dashboard", label: "Dashboard", icon: "dashboard", group: "Overview" },
-  ]
-  if (can(ctx, "ticket:read")) {
-    nav.push({ href: "/tickets", label: "Tickets", icon: "ticket", group: "Overview" })
-    nav.push({ href: "/my-work", label: "My Work", icon: "myWork", group: "Overview" })
-  }
-  if (can(ctx, "ticket:verify") || can(ctx, "ticket:close")) {
-    nav.push({
-      href: "/verifications",
-      label: "Verifications",
-      icon: "verify",
-      group: "Overview",
-      badge: pendingVerifyCount || undefined,
-    })
-  }
-  if (can(ctx, "rca:read")) {
-    nav.push({ href: "/rca", label: "RCA & CAPA", icon: "rca", group: "Quality" })
-  }
-  if (can(ctx, "audit:read")) {
-    nav.push({ href: "/audits", label: "Audits", icon: "audit", group: "Quality" })
-  }
-  if (can(ctx, "report:read")) {
-    nav.push({ href: "/reports", label: "Reports", icon: "report", group: "Insights" })
-  }
-  if (can(ctx, "branch:read")) {
-    nav.push({ href: "/branches", label: "Branches", icon: "branch", group: "Workspace" })
-  }
-  if (can(ctx, "user:read")) {
-    nav.push({ href: "/users", label: "Users", icon: "users", group: "Workspace" })
-  }
-  const canSettings =
-    can(ctx, "settings:manage") ||
-    can(ctx, "settings:sla") ||
-    can(ctx, "tenant:manage") ||
-    can(ctx, "billing:manage")
-  if (canSettings) {
-    nav.push({ href: "/settings", label: "Settings", icon: "settings", group: "Workspace" })
-  }
-  if (can(ctx, "log:read")) {
-    nav.push({ href: "/audit-log", label: "Audit log", icon: "audit", group: "Compliance" })
-  }
+  // The UI hides what you can't do; the server checks again on every action. Members can also
+  // have menus switched off by an admin (Users → Edit access), which visibleMenus applies.
+  const nav: NavItem[] = visibleMenus(ctx).map((m) => ({
+    href: m.href,
+    label: m.label,
+    icon: m.icon,
+    group: m.group,
+    badge: m.key === "verifications" ? pendingVerifyCount || undefined : undefined,
+  }))
+  const canSettings = nav.some((i) => i.href === "/settings")
   if (user.isSuperAdmin) {
     nav.push({ href: "/super", label: "Super admin", icon: "superAdmin", group: "Platform" })
   }

@@ -131,8 +131,9 @@ test("an invited teammate joins with only the access they were given", async ({ 
   const staffEmail = uniqueEmail("staff")
 
   await navTo(page, "Users")
-  await page.getByRole("button", { name: "Invite people" }).click()
-  const dialog = page.getByRole("dialog", { name: "Invite people" })
+  await page.getByRole("button", { name: "Add user" }).click()
+  const dialog = page.getByRole("dialog", { name: "Add user" })
+  await dialog.getByRole("radio", { name: /Send invite link/ }).click()
   await dialog.getByLabel("Email").fill(staffEmail)
   await dialog.getByRole("checkbox", { name: /^L1 staff/ }).check()
   await dialog.getByRole("checkbox", { name: /Hotel Delhi/ }).check()
@@ -159,6 +160,46 @@ test("an invited teammate joins with only the access they were given", async ({ 
   await expect(nav.getByRole("link", { name: "Branches" })).toBeVisible()
   await expect(nav.getByRole("link", { name: "Users" })).toHaveCount(0)
   await expect(nav.getByRole("link", { name: "Audit log" })).toHaveCount(0)
+})
+
+test("an admin creates a user with a password and picks which menus they see", async ({ page }) => {
+  await newAdmin(page)
+  const email = uniqueEmail("direct")
+
+  await navTo(page, "Users")
+  await page.getByRole("button", { name: "Add user" }).click()
+  const dialog = page.getByRole("dialog", { name: "Add user" })
+  await expect(dialog.getByRole("radio", { name: /Set a password/ })).toBeChecked()
+  await dialog.getByLabel("Full name").fill("Meera Shah")
+  await dialog.getByLabel("Email").fill(email)
+  await dialog.getByLabel("Password", { exact: true }).fill(PASSWORD)
+  await dialog.getByRole("checkbox", { name: /^L2 supervisor/ }).check()
+  await dialog.getByRole("checkbox", { name: /Hotel Delhi/ }).check()
+  // Every menu starts on; narrow this person to Tickets only.
+  const menus = dialog.getByRole("group", { name: "Sidebar menus" })
+  for (const box of await menus.getByRole("checkbox").all()) await box.uncheck()
+  await menus.getByRole("checkbox", { name: /^Tickets/ }).check()
+  await dialog.getByRole("button", { name: "Create user" }).click()
+  await expect(dialog.getByText("User created")).toBeVisible()
+  await dialog.getByRole("button", { name: "Done" }).click()
+  await expect(page.getByText(email)).toBeVisible()
+  await expect(page.getByText("1 menu", { exact: true })).toBeVisible()
+
+  await signOut(page)
+  await page.goto("/sign-in")
+  await field(page, "Email").fill(email)
+  await field(page, "Password").fill(PASSWORD)
+  await page.getByRole("button", { name: "Sign in" }).click()
+  await expect(page).toHaveURL(/\/dashboard/)
+
+  const nav = await mainNav(page)
+  await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible()
+  await expect(nav.getByRole("link", { name: "Tickets" })).toBeVisible()
+  // Their role allows My Work and Branches, but the admin switched those menus off.
+  await expect(nav.getByRole("link", { name: "My Work" })).toHaveCount(0)
+  await expect(nav.getByRole("link", { name: "Branches" })).toHaveCount(0)
+  await page.goto("/my-work")
+  await expect(page).toHaveURL(/\/dashboard/)
 })
 
 test("the audit log records actions and verifies its hash chain", async ({ page }) => {

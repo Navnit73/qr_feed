@@ -16,6 +16,11 @@ export type TenantContext = {
   roles: string[]
   permissions: ReadonlySet<Permission>
   branchScope: BranchScope
+  /**
+   * Sidebar menus this member may use (see `@/server/rbac/menus`). `null`/absent = every menu
+   * their roles allow. Narrows what they see; permissions still decide what they can do.
+   */
+  menus?: ReadonlySet<string> | null
 }
 
 export function inBranchScope(scope: BranchScope, branchId: ObjectId): boolean {

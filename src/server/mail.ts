@@ -1,43 +1,78 @@
 import "server-only"
 import { env } from "@/server/env"
 
-export type Mail = { to: string; subject: string; text: string; html?: string; from?: string }
+export type Mail = {
+  to: string
+  subject: string
+  text: string
+  html?: string
+  from?: string
+  replyTo?: string
+  /** Resend de-duplicates retries with the same key for 24h, so a retried job can't double-send. */
+  idempotencyKey?: string
+}
 export type SmsMessage = { to: string; body: string; channel?: "sms" | "whatsapp" }
+export type MailConfig = { apiKey?: string; from?: string }
+export type MailResult = { delivered: boolean; provider: string; id?: string }
 
-/**
- * Transactional email delivery. Uses Resend HTTP API when RESEND_API_KEY is configured;
- * otherwise logs to console in non-production/local environments so flows work zero-config.
- */
-export async function sendMail(mail: Mail): Promise<{ delivered: boolean; provider: string }> {
-  let apiKey: string | undefined
-  let defaultFrom = "QR Feed <notifications@qrfeed.local>"
+const DEFAULT_FROM = "QR Feed <notifications@qrfeed.local>"
+
+// Vitest has no inbox; tests read what would have been sent from here.
+const outbox: Mail[] = []
+
+/** Test helper: returns and clears the mail captured while no Resend key is configured. */
+export function takeTestOutbox(): Mail[] {
+  return outbox.splice(0, outbox.length)
+}
+
+function mailConfigFromEnv(): MailConfig {
   try {
     const e = env()
-    apiKey = e.RESEND_API_KEY
-    defaultFrom = e.MAIL_FROM
+    return { apiKey: e.RESEND_API_KEY, from: e.MAIL_FROM }
   } catch {
     // Allow tests without full env
+    return {}
   }
+}
 
-  if (apiKey) {
+/**
+ * Transactional email via the Resend HTTP API (`RESEND_API_KEY`, `MAIL_FROM` with a domain
+ * verified in Resend). Without a key it logs to the console in dev, so flows work zero-config,
+ * and is suppressed in production. Never throws: callers fire-and-forget notifications.
+ */
+export async function sendMail(
+  mail: Mail,
+  config: MailConfig = mailConfigFromEnv(),
+): Promise<MailResult> {
+  if (config.apiKey) {
     try {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${config.apiKey}`,
           "Content-Type": "application/json",
+          ...(mail.idempotencyKey ? { "Idempotency-Key": mail.idempotencyKey.slice(0, 256) } : {}),
         },
         body: JSON.stringify({
-          from: mail.from ?? defaultFrom,
+          from: mail.from ?? config.from ?? DEFAULT_FROM,
           to: [mail.to],
           subject: mail.subject,
           text: mail.text,
           ...(mail.html ? { html: mail.html } : {}),
+          ...(mail.replyTo ? { reply_to: mail.replyTo } : {}),
         }),
         signal: AbortSignal.timeout(10_000),
       })
-      return { delivered: res.ok, provider: "resend" }
-    } catch {
+      if (!res.ok) {
+        // e.g. 403 "domain not verified", 422 bad from-address, 429 rate limit.
+        const detail = (await res.text().catch(() => "")).slice(0, 300)
+        console.error(`[mail] Resend rejected "${mail.subject}" (${res.status}): ${detail}`)
+        return { delivered: false, provider: "resend" }
+      }
+      const body = (await res.json().catch(() => ({}))) as { id?: string }
+      return { delivered: true, provider: "resend", ...(body.id ? { id: body.id } : {}) }
+    } catch (err) {
+      console.error(`[mail] Resend request failed for "${mail.subject}": ${String(err)}`)
       return { delivered: false, provider: "resend" }
     }
   }
@@ -46,7 +81,9 @@ export async function sendMail(mail: Mail): Promise<{ delivered: boolean; provid
     console.warn(`[mail] RESEND_API_KEY not configured; suppressed email to=${mail.to}`)
     return { delivered: false, provider: "unconfigured" }
   }
-  if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  if (process.env.VITEST) {
+    outbox.push(mail)
+  } else if (process.env.NODE_ENV !== "test") {
     console.info(`[mail] to=${mail.to} subject="${mail.subject}"\n${mail.text}`)
   }
   return { delivered: true, provider: "console" }

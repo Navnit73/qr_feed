@@ -48,6 +48,7 @@ const prefsSchema = z.object({
   }),
   events: z.object({
     assigned: z.boolean().default(true),
+    newTicket: z.boolean().default(true),
     escalated: z.boolean().default(true),
     verification: z.boolean().default(true),
     capaDue: z.boolean().default(true),
@@ -590,7 +591,14 @@ export async function sweepScheduledReports(now = new Date()): Promise<number> {
 
 const DEFAULT_PREFS = {
   channels: { in_app: true, email: true, sms: false, whatsapp: false, push: false },
-  events: { assigned: true, escalated: true, verification: true, capaDue: true, digest: false },
+  events: {
+    assigned: true,
+    newTicket: true,
+    escalated: true,
+    verification: true,
+    capaDue: true,
+    digest: false,
+  },
   digestMode: "instant" as const,
   quietHours: { enabled: false, start: "22:00", end: "07:00", timezone: "UTC" },
 }
@@ -602,7 +610,7 @@ export async function getNotificationPreferences(ctx: TenantContext) {
   if (!doc) return DEFAULT_PREFS
   return {
     channels: doc.channels,
-    events: doc.events,
+    events: { ...DEFAULT_PREFS.events, ...doc.events },
     digestMode: doc.digestMode,
     quietHours: doc.quietHours ?? DEFAULT_PREFS.quietHours,
   }

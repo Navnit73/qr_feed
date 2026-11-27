@@ -32,6 +32,7 @@ One row per feature. **Tests** lists the IDs from [TESTS.md](TESTS.md) that prov
 | F-1.5 | Location hierarchy: building › floor › department › location (tree UI)       | ✅     | T-LOC-1, T-LOC-2, T-LIB-9, T-E2E-4   | Create, rename, move, archive; collapsible site map with QR coverage & setup guide |
 | F-1.6 | Super-admin console: tenants, suspend/reactivate, plan limits, impersonation | ✅     | T-ORG-1, T-E2E-4                     | Plan/limits dialog, platform health, HMAC-signed audited impersonation             |
 | F-1.7 | Append-only, hash-chained audit log wired into every mutation                | ✅     | T-AUD-1, T-E2E-4                     | Gap-free under concurrency; verify on the audit page                               |
+| F-1.8 | Users: add with an admin-set password; per-member sidebar menu access        | ✅     | T-MENU-1, T-MEM-1, T-E2E-4           | "Add user" dialog (password or invite); hidden menus are also blocked by URL       |
 
 ## P2 · QR & public feedback intake
 
@@ -102,12 +103,13 @@ One row per feature. **Tests** lists the IDs from [TESTS.md](TESTS.md) that prov
 
 ## P8 · Analytics, reporting, notifications
 
-| ID    | Feature                                                      | Status | Tests            | Notes                                                               |
-| ----- | ------------------------------------------------------------ | ------ | ---------------- | ------------------------------------------------------------------- |
-| F-8.1 | Dashboards: SLA, MTTR, volume, ratings, heatmaps, CAPA aging | ✅     | T-REP-1, T-E2E-8 | `/reports` using AreaTrend, BarCompare, heatmap & workload tables   |
-| F-8.2 | Scheduled email digests; CSV/Excel export                    | ✅     | T-REP-1          | `/api/reports/export` RFC-4180 CSV + saved scheduled digests        |
-| F-8.3 | Notification preferences, quiet hours, digest mode           | ✅     | T-REP-1          | `/settings/notifications` per-channel, event, quiet hours & cadence |
-| F-8.4 | Saved reports and branch comparison                          | ✅     | T-REP-1          | Multi-branch side-by-side comparison & saved report views           |
+| ID    | Feature                                                                                    | Status | Tests                         | Notes                                                                                                                        |
+| ----- | ------------------------------------------------------------------------------------------ | ------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| F-8.1 | Dashboards: SLA, MTTR, volume, ratings, heatmaps, CAPA aging                               | ✅     | T-REP-1, T-E2E-8              | `/reports` using AreaTrend, BarCompare, heatmap & workload tables                                                            |
+| F-8.2 | Scheduled email digests; CSV/Excel export                                                  | ✅     | T-REP-1                       | `/api/reports/export` RFC-4180 CSV + saved scheduled digests                                                                 |
+| F-8.3 | Notification preferences, quiet hours, digest mode                                         | ✅     | T-REP-1                       | `/settings/notifications` per-channel, event, quiet hours & cadence                                                          |
+| F-8.4 | Saved reports and branch comparison                                                        | ✅     | T-REP-1                       | Multi-branch side-by-side comparison & saved report views                                                                    |
+| F-8.5 | Branded Resend emails: ticket raised/auto-assigned/assigned/closed, account access changes | ✅     | T-MAIL-1, T-MAIL-2, T-NOTIF-1 | HTML+text template; unassigned tickets go to branch assigners; welcome, role change, deactivate emails; Resend errors logged |
 
 ## P9 · Billing, plans, white-label, integrations
 

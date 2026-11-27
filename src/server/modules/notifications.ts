@@ -2,10 +2,16 @@ import "server-only"
 import type { ObjectId } from "mongodb"
 import { parseInput } from "@/lib/api/validation"
 import type { TenantContext } from "@/server/db/tenant-context"
+import { inBranchScope } from "@/server/db/tenant-context"
+import { renderEmail } from "@/server/email-template"
 import { sendMail, sendSms } from "@/server/mail"
-import { appBaseUrl } from "@/server/public-url"
+import { getTenant } from "@/server/modules/tenants"
+import { resolveAccess } from "@/server/rbac/ability"
+import type { Permission } from "@/server/rbac/permissions"
+import { appUrl } from "@/server/public-url"
 import {
   members,
+  roles as rolesRepo,
   notificationPreferences,
   notifications,
   type NotificationChannel,
@@ -14,7 +20,14 @@ import {
 import { objectId } from "@/server/validation"
 
 function eventKeyFor(type: string): keyof NotificationPrefDoc["events"] | null {
-  if (type === "ticket.assigned" || type === "ticket.reassigned") return "assigned"
+  if (
+    type === "ticket.assigned" ||
+    type === "ticket.reassigned" ||
+    type === "ticket.closed" ||
+    type === "comment.added"
+  )
+    return "assigned"
+  if (type === "ticket.created") return "newTicket"
   if (type.startsWith("sla.")) return "escalated"
   if (type === "ticket.submitted" || type === "ticket.reopened") return "verification"
   if (type.startsWith("capa.")) return "capaDue"
@@ -50,11 +63,7 @@ function isInQuietHours(quiet: NotificationPrefDoc["quietHours"], now: Date): bo
 function absoluteHref(href?: string): string | undefined {
   if (!href) return undefined
   if (href.startsWith("http://") || href.startsWith("https://")) return href
-  try {
-    return `${appBaseUrl()}${href.startsWith("/") ? href : `/${href}`}`
-  } catch {
-    return href
-  }
+  return appUrl(href)
 }
 
 export async function notifyUser(
@@ -67,14 +76,23 @@ export async function notifyUser(
     href?: string
     channels?: NotificationChannel[]
     meta?: Record<string, unknown>
+    /** Extra rows for the email, e.g. [["Priority", "High"]]. */
+    details?: [string, string][]
+    /** Button text for `href` in the email. Defaults to "Open in QR Feed". */
+    cta?: string
+    /** Account/security mail (access changes) ignores preferences and quiet hours. */
+    essential?: boolean
   },
 ) {
   const now = new Date()
   const requestedChannels = input.channels ?? ["in_app", "email"]
   const sysCtx: TenantContext = { ...ctx, branchScope: "all" }
 
-  const prefs = await notificationPreferences.forTenant(sysCtx).findOne({ userId: input.userId })
+  const prefs = input.essential
+    ? null
+    : await notificationPreferences.forTenant(sysCtx).findOne({ userId: input.userId })
   const evKey = eventKeyFor(input.type)
+  // `=== false`: older preference docs predate some keys (newTicket), which then default on.
   if (prefs && evKey && prefs.events[evKey] === false) {
     return
   }
@@ -110,13 +128,19 @@ export async function notifyUser(
       const link = absoluteHref(input.href)
       const tasks: Promise<unknown>[] = []
       if (channels.includes("email") && member.email) {
-        tasks.push(
-          sendMail({
-            to: member.email,
-            subject: input.title,
-            text: `${input.body}${link ? `\n\nOpen: ${link}` : ""}`,
-          }).catch(() => {}),
-        )
+        const tenant = await getTenant(ctx.tenantId)
+        const { html, text } = renderEmail({
+          brand: tenant?.name,
+          preheader: input.body.slice(0, 120),
+          heading: input.title,
+          intro: input.body,
+          details: input.details,
+          cta: link ? { label: input.cta ?? "Open in QR Feed", url: link } : undefined,
+          footnote: input.essential
+            ? "This is an account notice, sent whatever your alert settings are."
+            : `You get this because of your alert settings. Change them at ${absoluteHref("/settings/notifications")}.`,
+        })
+        tasks.push(sendMail({ to: member.email, subject: input.title, text, html }).catch(() => {}))
       }
       if (channels.includes("sms") && member.phone) {
         tasks.push(
@@ -141,6 +165,33 @@ export async function notifyUser(
   }
 }
 
+/**
+ * Active members who hold any of `permissions` for `branchId` (respecting branch scope),
+ * minus `exclude`. Used to tell the right people about a branch's tickets.
+ */
+export async function membersWhoCan(
+  ctx: TenantContext,
+  permissions: Permission[],
+  branchId: ObjectId,
+  { exclude, limit = 5 }: { exclude?: string; limit?: number } = {},
+) {
+  const sys: TenantContext = { ...ctx, branchScope: "all" }
+  const [active, customRoles] = await Promise.all([
+    members.forTenant(sys).find({ status: "active" }),
+    rolesRepo.forTenant(sys).find({}),
+  ])
+  return active
+    .filter((m) => {
+      if (m.userId === exclude) return false
+      const access = resolveAccess(m, customRoles)
+      return (
+        permissions.some((p) => access.permissions.has(p)) &&
+        inBranchScope(access.branchScope, branchId)
+      )
+    })
+    .slice(0, limit)
+}
+
 export async function notifyReporterClosure(input: {
   tenantName: string
   ticketNumber: string
@@ -158,7 +209,21 @@ export async function notifyReporterClosure(input: {
       sendMail({
         to: input.email,
         subject: `${input.ticketNumber} · Resolved (${input.tenantName})`,
-        text: msg,
+        ...renderEmail({
+          brand: input.tenantName,
+          preheader: `Your report ${input.ticketNumber} has been resolved.`,
+          heading: `${input.ticketNumber} is resolved`,
+          intro: [
+            `Thanks for reporting ${input.categoryName} at ${input.locationName}. The team has resolved and closed it.`,
+            ...(input.resolutionNote ? [`Resolution: ${input.resolutionNote.slice(0, 400)}`] : []),
+            "Use your original tracking link to tell us whether it was fixed and rate the service.",
+          ],
+          details: [
+            ["Ticket", input.ticketNumber],
+            ["Location", input.locationName],
+            ["Issue", input.categoryName],
+          ],
+        }),
       }).catch(() => {}),
     )
   }
@@ -194,7 +259,19 @@ export async function notifyReporterConfirmation(input: {
       sendMail({
         to: input.email,
         subject: `${input.ticketNumber} · Report received (${input.tenantName})`,
-        text: `${intro}\n\nTrack live progress here:\n${input.trackingUrl}`,
+        ...renderEmail({
+          brand: input.tenantName,
+          preheader: intro,
+          heading: input.duplicate ? "Added to an open report" : "We've received your report",
+          intro,
+          details: [
+            ["Ticket", input.ticketNumber],
+            ["Location", input.locationName],
+            ["Issue", input.categoryName],
+          ],
+          cta: { label: "Track progress", url: input.trackingUrl },
+          footnote: "Keep this email: the link is private to you and shows live progress.",
+        }),
       }).catch(() => {}),
     )
   }

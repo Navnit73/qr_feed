@@ -667,7 +667,7 @@ export function dispatchWebhookEvent(
   try {
     after(run)
   } catch {
-    void run()
+    void run().catch(() => {})
   }
 }
 

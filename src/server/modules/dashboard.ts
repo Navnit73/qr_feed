@@ -12,6 +12,8 @@ import {
   members,
   OPEN_TICKET_STATUSES,
   qrCodes,
+  surveyResponses,
+  surveys,
   tickets,
 } from "@/server/repositories"
 
@@ -35,36 +37,38 @@ export async function getDashboard(ctx: TenantContext, filters: DashboardFilters
       ? new ObjectId(filters.branchId)
       : undefined
 
-  const [tenant, branchList, locationCount, memberCount, qrCount, ticketData] = await Promise.all([
-    getTenant(ctx.tenantId),
-    can(ctx, "branch:read")
-      ? branches
-          .forTenant(ctx)
-          .find({ status: "active" }, { sort: { name: 1 }, projection: { name: 1, timezone: 1 } })
-      : null,
-    can(ctx, "location:read")
-      ? locations
-          .forTenant(ctx)
-          .count({ status: "active", ...(branchObjId ? { branchId: branchObjId } : {}) })
-      : null,
-    can(ctx, "user:read")
-      ? members
-          .forTenant(ctx)
-          .count(
-            branchObjId
-              ? { status: "active", branchIds: branchObjId }
-              : ctx.branchScope === "all"
-                ? { status: "active" }
-                : { status: "active", branchIds: { $in: ctx.branchScope } },
-          )
-      : null,
-    can(ctx, "qr:read")
-      ? qrCodes
-          .forTenant(ctx)
-          .count({ status: "active", ...(branchObjId ? { branchId: branchObjId } : {}) })
-      : null,
-    can(ctx, "ticket:read") ? ticketSummary(ctx, { branchObjId, days }) : null,
-  ])
+  const [tenant, branchList, locationCount, memberCount, qrCount, ticketData, surveyData] =
+    await Promise.all([
+      getTenant(ctx.tenantId),
+      can(ctx, "branch:read")
+        ? branches
+            .forTenant(ctx)
+            .find({ status: "active" }, { sort: { name: 1 }, projection: { name: 1, timezone: 1 } })
+        : null,
+      can(ctx, "location:read")
+        ? locations
+            .forTenant(ctx)
+            .count({ status: "active", ...(branchObjId ? { branchId: branchObjId } : {}) })
+        : null,
+      can(ctx, "user:read")
+        ? members
+            .forTenant(ctx)
+            .count(
+              branchObjId
+                ? { status: "active", branchIds: branchObjId }
+                : ctx.branchScope === "all"
+                  ? { status: "active" }
+                  : { status: "active", branchIds: { $in: ctx.branchScope } },
+            )
+        : null,
+      can(ctx, "qr:read")
+        ? qrCodes
+            .forTenant(ctx)
+            .count({ status: "active", ...(branchObjId ? { branchId: branchObjId } : {}) })
+        : null,
+      can(ctx, "ticket:read") ? ticketSummary(ctx, { branchObjId, days }) : null,
+      can(ctx, "qr:read") ? surveySummary(ctx, { branchObjId, days }) : null,
+    ])
 
   return {
     filters: {
@@ -82,6 +86,7 @@ export async function getDashboard(ctx: TenantContext, filters: DashboardFilters
       members: memberCount,
     },
     tickets: ticketData,
+    surveys: surveyData,
   }
 }
 
@@ -478,5 +483,266 @@ async function ticketSummary(
       reportCount: t.reportCount,
       createdAt: t.createdAt.toISOString(),
     })),
+  }
+}
+
+async function surveySummary(
+  ctx: TenantContext,
+  { branchObjId, days }: { branchObjId?: ObjectId; days: number },
+) {
+  const now = new Date()
+  const rangeStart = new Date(now.getTime() - days * DAY_MS)
+  const prevRangeStart = new Date(now.getTime() - days * 2 * DAY_MS)
+
+  const scopeFilter = branchObjId
+    ? { status: { $ne: "archived" as const }, branchId: branchObjId }
+    : ctx.branchScope !== "all"
+      ? {
+          status: { $ne: "archived" as const },
+          $or: [{ branchId: null }, { branchId: { $in: ctx.branchScope } }],
+        }
+      : { status: { $ne: "archived" as const } }
+
+  const surveyList = await surveys.forTenant(ctx).find(scopeFilter, {
+    sort: { responseCount: -1, createdAt: -1 },
+    limit: 100,
+    projection: {
+      title: 1,
+      shortCode: 1,
+      status: 1,
+      scopeLabel: 1,
+      scanCount: 1,
+      responseCount: 1,
+    },
+  })
+
+  const activeSurveys = surveyList.filter((s) => s.status === "active").length
+  const totalScans = surveyList.reduce((sum, s) => sum + (s.scanCount ?? 0), 0)
+  const totalResponses = surveyList.reduce((sum, s) => sum + (s.responseCount ?? 0), 0)
+
+  if (surveyList.length === 0) {
+    return {
+      activeSurveys: 0,
+      totalSurveys: 0,
+      totalScans: 0,
+      totalResponses: 0,
+      responsesInRange: 0,
+      responsesDelta: undefined as number | undefined,
+      npsScore: null as number | null,
+      npsDelta: undefined as number | undefined,
+      npsResponses: 0,
+      promoters: 0,
+      passives: 0,
+      detractors: 0,
+      avgRating: null as number | null,
+      ratedResponses: 0,
+      topSurveys: [] as {
+        id: string
+        title: string
+        shortCode: string
+        status: "active" | "paused"
+        scopeLabel: string
+        scans: number
+        responses: number
+        nps: number | null
+        avgRating: number | null
+      }[],
+    }
+  }
+
+  const surveyIds = surveyList.map((s) => s._id)
+  const [facet] = await surveyResponses.forTenant(ctx).aggregate<{
+    inRange: {
+      count: number
+      ratingSum: number
+      ratingCount: number
+      npsCount: number
+      promoters: number
+      passives: number
+      detractors: number
+    }[]
+    prevRange: {
+      count: number
+      npsCount: number
+      promoters: number
+      detractors: number
+    }[]
+    bySurvey: {
+      _id: ObjectId
+      responses: number
+      ratingSum: number
+      ratingCount: number
+      npsCount: number
+      promoters: number
+      detractors: number
+    }[]
+  }>([
+    { $match: { surveyId: { $in: surveyIds } } },
+    {
+      $facet: {
+        inRange: [
+          { $match: { submittedAt: { $gte: rangeStart } } },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              ratingSum: {
+                $sum: {
+                  $cond: [{ $isNumber: "$overallRating" }, "$overallRating", 0],
+                },
+              },
+              ratingCount: {
+                $sum: { $cond: [{ $isNumber: "$overallRating" }, 1, 0] },
+              },
+              npsCount: {
+                $sum: { $cond: [{ $isNumber: "$npsScore" }, 1, 0] },
+              },
+              promoters: {
+                $sum: {
+                  $cond: [{ $and: [{ $isNumber: "$npsScore" }, { $gte: ["$npsScore", 9] }] }, 1, 0],
+                },
+              },
+              passives: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $isNumber: "$npsScore" },
+                        { $gte: ["$npsScore", 7] },
+                        { $lte: ["$npsScore", 8] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              detractors: {
+                $sum: {
+                  $cond: [{ $and: [{ $isNumber: "$npsScore" }, { $lte: ["$npsScore", 6] }] }, 1, 0],
+                },
+              },
+            },
+          },
+        ],
+        prevRange: [
+          { $match: { submittedAt: { $gte: prevRangeStart, $lt: rangeStart } } },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              npsCount: {
+                $sum: { $cond: [{ $isNumber: "$npsScore" }, 1, 0] },
+              },
+              promoters: {
+                $sum: {
+                  $cond: [{ $and: [{ $isNumber: "$npsScore" }, { $gte: ["$npsScore", 9] }] }, 1, 0],
+                },
+              },
+              detractors: {
+                $sum: {
+                  $cond: [{ $and: [{ $isNumber: "$npsScore" }, { $lte: ["$npsScore", 6] }] }, 1, 0],
+                },
+              },
+            },
+          },
+        ],
+        bySurvey: [
+          {
+            $group: {
+              _id: "$surveyId",
+              responses: { $sum: 1 },
+              ratingSum: {
+                $sum: {
+                  $cond: [{ $isNumber: "$overallRating" }, "$overallRating", 0],
+                },
+              },
+              ratingCount: {
+                $sum: { $cond: [{ $isNumber: "$overallRating" }, 1, 0] },
+              },
+              npsCount: {
+                $sum: { $cond: [{ $isNumber: "$npsScore" }, 1, 0] },
+              },
+              promoters: {
+                $sum: {
+                  $cond: [{ $and: [{ $isNumber: "$npsScore" }, { $gte: ["$npsScore", 9] }] }, 1, 0],
+                },
+              },
+              detractors: {
+                $sum: {
+                  $cond: [{ $and: [{ $isNumber: "$npsScore" }, { $lte: ["$npsScore", 6] }] }, 1, 0],
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  ])
+
+  const cur = facet?.inRange[0] ?? {
+    count: 0,
+    ratingSum: 0,
+    ratingCount: 0,
+    npsCount: 0,
+    promoters: 0,
+    passives: 0,
+    detractors: 0,
+  }
+  const prev = facet?.prevRange[0] ?? { count: 0, npsCount: 0, promoters: 0, detractors: 0 }
+
+  const npsScore =
+    cur.npsCount > 0 ? Math.round(((cur.promoters - cur.detractors) / cur.npsCount) * 100) : null
+  const prevNpsScore =
+    prev.npsCount > 0
+      ? Math.round(((prev.promoters - prev.detractors) / prev.npsCount) * 100)
+      : null
+  const npsDelta = npsScore !== null && prevNpsScore !== null ? npsScore - prevNpsScore : undefined
+
+  const avgRating =
+    cur.ratingCount > 0 ? Math.round((cur.ratingSum / cur.ratingCount) * 10) / 10 : null
+
+  const bySurveyMap = new Map((facet?.bySurvey ?? []).map((row) => [row._id.toHexString(), row]))
+
+  const topSurveys = surveyList.slice(0, 5).map((s) => {
+    const id = s._id.toHexString()
+    const stats = bySurveyMap.get(id)
+    const sNps =
+      stats && stats.npsCount > 0
+        ? Math.round(((stats.promoters - stats.detractors) / stats.npsCount) * 100)
+        : null
+    const sAvg =
+      stats && stats.ratingCount > 0
+        ? Math.round((stats.ratingSum / stats.ratingCount) * 10) / 10
+        : null
+    return {
+      id,
+      title: s.title,
+      shortCode: s.shortCode,
+      status: s.status === "paused" ? ("paused" as const) : ("active" as const),
+      scopeLabel: s.scopeLabel ?? "",
+      scans: s.scanCount ?? 0,
+      responses: Math.max(s.responseCount ?? 0, stats?.responses ?? 0),
+      nps: sNps,
+      avgRating: sAvg,
+    }
+  })
+
+  return {
+    activeSurveys,
+    totalSurveys: surveyList.length,
+    totalScans,
+    totalResponses,
+    responsesInRange: cur.count,
+    responsesDelta: percentChange(cur.count, prev.count),
+    npsScore,
+    npsDelta,
+    npsResponses: cur.npsCount,
+    promoters: cur.promoters,
+    passives: cur.passives,
+    detractors: cur.detractors,
+    avgRating,
+    ratedResponses: cur.ratingCount,
+    topSurveys,
   }
 }

@@ -12,6 +12,7 @@ export function NotificationPrefsForm({
     channels: { in_app: boolean; email: boolean; sms: boolean; whatsapp: boolean; push: boolean }
     events: {
       assigned: boolean
+      newTicket: boolean
       escalated: boolean
       verification: boolean
       capaDue: boolean
@@ -56,7 +57,8 @@ export function NotificationPrefsForm({
         <legend className="text-sm font-semibold">Events</legend>
         <div className="grid gap-2 sm:grid-cols-2">
           {[
-            ["ev_assigned", "Ticket assigned to me", prefs.events.assigned],
+            ["ev_assigned", "My tickets: assigned, remarks & closed", prefs.events.assigned],
+            ["ev_newTicket", "New unassigned tickets in my branches", prefs.events.newTicket],
             ["ev_escalated", "SLA warnings & escalations", prefs.events.escalated],
             ["ev_verification", "Submitted for verification / reopened", prefs.events.verification],
             ["ev_capaDue", "CAPA action reminders", prefs.events.capaDue],

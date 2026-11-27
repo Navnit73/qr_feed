@@ -110,6 +110,21 @@ describe("Audit fixes, feature completions & background sweepers", () => {
         { ip: "10.0.0.1", limits: null },
       ),
     ).rejects.toMatchObject({ code: "CONFLICT" })
+
+    // Legacy tenant missing `limits.monthlyTickets` falls back to PLAN_CATALOG[plan].limits.monthlyTickets
+    await setTenantLimits({
+      actorId: "super-1",
+      tenantId: tenant._id,
+      plan: "trial",
+      limits: { branches: 3, users: 15, locations: 200 },
+    })
+    const fallbackTicket = await createManualTicket(ctx, {
+      locationId: loc._id.toHexString(),
+      categoryId: cats[1]._id.toHexString(),
+      severity: "low",
+      description: "Allowed via trial catalog monthlyTickets fallback",
+    })
+    expect(fallbackTicket.number).toMatch(/^TKT-/)
   })
 
   it("merges duplicate tickets, transfers tracking tokens, and links/closes RCA in stage order", async () => {
