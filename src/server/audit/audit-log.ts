@@ -128,12 +128,25 @@ export async function appendAudit(
 
 export async function listAudit(
   ctx: TenantContext,
-  opts: { page?: number; pageSize?: number; entity?: string; entityId?: string } = {},
+  opts: {
+    page?: number
+    pageSize?: number
+    entity?: string
+    entityId?: string
+    action?: string
+  } = {},
 ) {
   assertCan(ctx, "log:read")
   const filter: Record<string, unknown> = {}
   if (opts.entity) filter.entity = opts.entity
   if (opts.entityId) filter.entityId = opts.entityId
+  if (opts.action) {
+    const escaped = opts.action
+      .trim()
+      .slice(0, 60)
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    if (escaped) filter.action = new RegExp(escaped, "i")
+  }
   return auditLogs.forTenant(ctx).paginate(filter, {
     page: opts.page,
     pageSize: opts.pageSize ?? 25,
@@ -144,17 +157,28 @@ export async function listAudit(
 export type ChainReport =
   { ok: true; count: number } | { ok: false; count: number; brokenAtSeq: number }
 
-/** Recomputes every hash in order. Any edit, deletion or reordering shows up here. */
+/** Recomputes every hash in order. Any edit, deletion, reordering or tail truncation shows up here. */
 export async function verifyChain(ctx: TenantContext): Promise<ChainReport> {
   assertCan(ctx, "log:read")
-  const entries = await auditLogs.forTenant(ctx).find({}, { sort: { seq: 1 } })
+  const [head, total] = await Promise.all([
+    heads().findOne({ tenantId: ctx.tenantId }),
+    auditLogs.forTenant(ctx).count({}),
+  ])
+  const cursor = db()
+    .collection<AuditLogDoc>("auditLogs")
+    .find({ tenantId: ctx.tenantId })
+    .sort({ seq: 1 })
   let prevHash = ""
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i]
-    if (e.seq !== i + 1 || e.prevHash !== prevHash || hashOf(e) !== e.hash) {
-      return { ok: false, count: entries.length, brokenAtSeq: e.seq }
+  let count = 0
+  for await (const e of cursor) {
+    if (e.seq !== count + 1 || e.prevHash !== prevHash || hashOf(e) !== e.hash) {
+      return { ok: false, count: total, brokenAtSeq: e.seq }
     }
     prevHash = e.hash
+    count++
   }
-  return { ok: true, count: entries.length }
+  if (head && (head.seq !== count || head.hash !== prevHash)) {
+    return { ok: false, count: total, brokenAtSeq: count + 1 }
+  }
+  return { ok: true, count }
 }

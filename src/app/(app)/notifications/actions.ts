@@ -9,8 +9,8 @@ export async function markAllReadAction(): Promise<ActionState> {
   const ctx = await requireTenantContext()
   return runAction(async () => {
     await markAllRead(ctx)
+    revalidatePath("/", "layout")
     revalidatePath("/notifications")
-    revalidatePath("/dashboard")
   })
 }
 
@@ -18,6 +18,7 @@ export async function markOneReadAction(id: string): Promise<ActionState> {
   const ctx = await requireTenantContext()
   return runAction(async () => {
     await markNotificationRead(ctx, id)
+    revalidatePath("/", "layout")
     revalidatePath("/notifications")
   })
 }

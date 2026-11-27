@@ -16,16 +16,29 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "QR Feed",
-  description: "QR Feed",
+  description: "QR Feedback, SLA Escalation, RCA/CAPA and Audits",
 }
 
 export const viewport: Viewport = {
-  themeColor: "#ffffff",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f9fafb" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+  ],
 }
+
+// Restores saved dark/light theme before first paint (zero FOUC).
+const THEME_SCRIPT = `try{var t=localStorage.getItem("qrfeed.theme");if(t==="dark"||(!t&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.classList.add("dark")}catch(e){}`
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body className="flex min-h-full flex-col">
         <SweetAlertProvider>{children}</SweetAlertProvider>
       </body>

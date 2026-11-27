@@ -98,4 +98,33 @@ describe("Phase 8 analytics, exports & notification preferences (F-8.1–F-8.4)"
     expect(prefs.digestMode).toBe("daily")
     expect(prefs.quietHours?.enabled).toBe(true)
   })
+
+  it("neutralizes CSV formula injection while leaving numeric fields intact", async () => {
+    const { tenant, branch } = await createOrganization(
+      { id: "admin-csv", email: "csv@rep.test", name: "CSV Admin" },
+      { orgName: "Formula Corp", industry: "other", branchName: "Main", timezone: "UTC" },
+    )
+    const ctx = (await resolveTenantContext("admin-csv", tenant._id))!
+    const loc = await createLocation(ctx, {
+      branchId: branch._id,
+      type: "location",
+      name: '=HYPERLINK("https://evil.test")',
+    })
+    const qr = await createQrCode(ctx, loc._id)
+    const cats = await listCategories(ctx, "other")
+    await submitFeedback(
+      qr.shortCode,
+      {
+        categoryId: cats[0]._id.toHexString(),
+        description: "+1+1 formula payload",
+        rating: 5,
+        consent: "on",
+      },
+      { ip: "127.0.0.1", limits: null },
+    )
+    const csv = await exportReportCsv(ctx, "tickets", 30)
+    expect(csv).toContain("'=HYPERLINK")
+    expect(csv).toContain("'+1+1 formula payload")
+    expect(csv).toContain(",5,")
+  })
 })

@@ -1,9 +1,11 @@
 "use client"
 
 import { useActionState, useState, useTransition } from "react"
+import { CopyButton } from "@/components/copy-button"
 import { CheckboxGroup, FormField, FormMessage, FormSelect, SubmitButton } from "@/components/form"
 import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
+import { useSweetAlert } from "@/components/sweet-alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -42,12 +44,16 @@ function ApiKeyForm({ onDone }: { onDone: () => void }) {
         <p className="text-sm text-muted-foreground">
           Copy this key now. We store only its SHA-256 hash and cannot show it again.
         </p>
-        <Input
-          readOnly
-          value={state.data.rawKey}
-          className="font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
+        <div className="flex gap-2">
+          <Input
+            readOnly
+            aria-label="Generated API key"
+            value={state.data.rawKey}
+            className="h-11 font-mono text-xs"
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <CopyButton text={state.data.rawKey} label="Copy" />
+        </div>
         <div className="flex justify-end">
           <Button onClick={onDone}>Done</Button>
         </div>
@@ -87,13 +93,25 @@ function ApiKeyForm({ onDone }: { onDone: () => void }) {
 }
 
 export function RevokeKeyButton({ id }: { id: string }) {
-  const [pending, startTransition] = useTransition()
+  const swal = useSweetAlert()
   return (
     <Button
       variant="ghost"
       size="sm"
-      loading={pending}
-      onClick={() => startTransition(() => void revokeApiKeyAction(id))}
+      onClick={() =>
+        swal.fire({
+          tone: "warning",
+          title: "Revoke this API key?",
+          text: "Any integration using this key will lose access immediately.",
+          confirmText: "Revoke",
+          cancelText: "Keep it",
+          confirmVariant: "destructive",
+          onConfirm: async () => {
+            const res = await revokeApiKeyAction(id)
+            if (res && !res.ok) throw new Error(res.error.message)
+          },
+        })
+      }
     >
       Revoke
     </Button>
@@ -125,12 +143,16 @@ function WebhookForm({ onDone }: { onDone: () => void }) {
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">Signing secret (shown once):</p>
-        <Input
-          readOnly
-          value={state.data.secret}
-          className="font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
+        <div className="flex gap-2">
+          <Input
+            readOnly
+            aria-label="Webhook signing secret"
+            value={state.data.secret}
+            className="h-11 font-mono text-xs"
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <CopyButton text={state.data.secret} label="Copy" />
+        </div>
         <div className="flex justify-end">
           <Button onClick={onDone}>Done</Button>
         </div>
@@ -179,32 +201,59 @@ function WebhookForm({ onDone }: { onDone: () => void }) {
 
 export function WebhookRowActions({ id }: { id: string }) {
   const [pending, startTransition] = useTransition()
-  const [resMsg, setResMsg] = useState<string | null>(null)
+  const [resMsg, setResMsg] = useState<{ text: string; isError: boolean } | null>(null)
+  const swal = useSweetAlert()
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       <Button
         variant="outline"
         size="sm"
         loading={pending}
-        onClick={() =>
+        onClick={() => {
+          setResMsg(null)
           startTransition(async () => {
             const r = await pingWebhookAction(id)
-            if (r?.ok)
-              setResMsg(r.data.ok ? `HTTP ${r.data.statusCode}` : `Failed (${r.data.statusCode})`)
+            if (r?.ok) {
+              setResMsg({
+                text: r.data.ok ? `HTTP ${r.data.statusCode}` : `Failed (${r.data.statusCode})`,
+                isError: !r.data.ok,
+              })
+            } else if (r) {
+              setResMsg({ text: r.error.message, isError: true })
+            }
           })
-        }
+        }}
       >
         Test ping
       </Button>
       <Button
         variant="ghost"
         size="sm"
-        loading={pending}
-        onClick={() => startTransition(() => void deleteWebhookAction(id))}
+        disabled={pending}
+        onClick={() =>
+          swal.fire({
+            tone: "warning",
+            title: "Delete this webhook?",
+            text: "Events will no longer be delivered to this endpoint.",
+            confirmText: "Delete",
+            cancelText: "Keep it",
+            confirmVariant: "destructive",
+            onConfirm: async () => {
+              const r = await deleteWebhookAction(id)
+              if (r && !r.ok) throw new Error(r.error.message)
+            },
+          })
+        }
       >
         Delete
       </Button>
-      {resMsg && <span className="text-xs text-muted-foreground">{resMsg}</span>}
+      {resMsg && (
+        <span
+          className={resMsg.isError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
+        >
+          {resMsg.text}
+        </span>
+      )}
     </div>
   )
 }

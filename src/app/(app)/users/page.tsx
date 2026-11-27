@@ -15,7 +15,7 @@ import { InviteDialog, MemberActions, RevokeInviteButton, type Option } from "./
 
 export const metadata: Metadata = { title: "Users · QR Feed" }
 
-const dateFormat = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" })
+const dateFormat = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "UTC" })
 
 export default async function UsersPage() {
   const ctx = await requireTenantContext()
@@ -95,7 +95,10 @@ export default async function UsersPage() {
                     <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                   )}
                 </p>
-                <p className="truncate text-sm text-muted-foreground">{m.email}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {m.email}
+                  {m.phone ? ` · ${m.phone}` : ""}
+                </p>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {m.roles.map((r) => (
@@ -110,16 +113,22 @@ export default async function UsersPage() {
                 ))}
                 {m.status === "inactive" && <Badge variant="destructive">Inactive</Badge>}
               </div>
-              {canManage && m.userId !== ctx.actorId && (
-                <MemberActions
-                  memberId={m._id.toHexString()}
-                  name={m.name}
-                  status={m.status}
-                  current={{ roles: m.roles, branchIds: m.branchIds.map((b) => b.toHexString()) }}
-                  roles={roleOptions}
-                  branches={branchOptions}
-                />
-              )}
+              {canManage &&
+                m.userId !== ctx.actorId &&
+                canGrantRoles(ctx, m.roles, customRoles) && (
+                  <MemberActions
+                    memberId={m._id.toHexString()}
+                    name={m.name}
+                    status={m.status}
+                    current={{
+                      roles: m.roles,
+                      branchIds: m.branchIds.map((b) => b.toHexString()),
+                      phone: m.phone ?? "",
+                    }}
+                    roles={roleOptions}
+                    branches={branchOptions}
+                  />
+                )}
             </li>
           ))}
         </ul>

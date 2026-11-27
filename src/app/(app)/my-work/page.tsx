@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/cards/empty-state"
 import { StatCard } from "@/components/cards/stat-card"
 import { Icon } from "@/components/icons"
 import { PageHeader } from "@/components/page-header"
+import { SlaChip } from "@/components/sla-chip"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { timeAgo } from "@/lib/relative-time"
@@ -16,11 +17,20 @@ import { MyWorkQuickButtons } from "./quick-actions"
 
 export const metadata: Metadata = { title: "My Work · QR Feed" }
 
-export default async function MyWorkPage() {
+export default async function MyWorkPage({ searchParams }: PageProps<"/my-work">) {
   const ctx = await requireTenantContext()
   if (!can(ctx, "ticket:read")) redirect("/dashboard")
 
-  const { items } = await queryTickets(ctx, { mine: true, status: "open", pageSize: 50 })
+  const rawPage = Number((await searchParams).page)
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
+  const { items, meta } = await queryTickets(ctx, {
+    mine: true,
+    status: "open",
+    excludeStatuses: ["pending_verification"],
+    sort: "sla_due",
+    page,
+    pageSize: 50,
+  })
   // eslint-disable-next-line react-hooks/purity -- single server render per request
   const now = Date.now()
   const waitingAccept = items.filter((t) => t.status === "assigned" || t.status === "new").length
@@ -31,7 +41,7 @@ export default async function MyWorkPage() {
     <>
       <PageHeader
         title="My Work"
-        description="Tickets assigned to you, ordered for fast action on mobile or desktop."
+        description="Tickets assigned to you, ordered by SLA due time for fast action on mobile or desktop."
         breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "My Work" }]}
         actions={
           <Link href="/tickets" className={buttonVariants({ variant: "outline", size: "lg" })}>
@@ -41,7 +51,7 @@ export default async function MyWorkPage() {
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <StatCard label="Assigned to you" value={items.length} icon="myWork" />
+        <StatCard label="Assigned to you" value={meta.total} icon="myWork" />
         <StatCard label="Waiting accept" value={waitingAccept} icon="clock" />
         <StatCard label="In progress / Breached" value={`${active} / ${breached}`} icon="sla" />
       </div>
@@ -64,6 +74,7 @@ export default async function MyWorkPage() {
         <ul className="space-y-3">
           {items.map((t) => {
             const id = t._id.toHexString()
+            const branchId = t.branchId.toHexString()
             return (
               <li
                 key={id}
@@ -86,7 +97,14 @@ export default async function MyWorkPage() {
                     {(t.currentLevel ?? 1) > 1 && (
                       <Badge variant="warning">L{t.currentLevel}</Badge>
                     )}
-                    {t.sla?.breached && <Badge variant="destructive">SLA breached</Badge>}
+                    <SlaChip
+                      createdAt={t.createdAt}
+                      resolveDueAt={t.sla?.resolveDueAt}
+                      pausedAt={t.sla?.pausedAt}
+                      resolvedAt={t.sla?.resolvedAt}
+                      breached={t.sla?.breached}
+                      now={now}
+                    />
                   </div>
                   <p className="font-semibold">{t.categoryName}</p>
                   <p className="text-sm text-muted-foreground">
@@ -99,7 +117,12 @@ export default async function MyWorkPage() {
                 </div>
 
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <MyWorkQuickButtons ticketId={id} status={t.status} />
+                  <MyWorkQuickButtons
+                    ticketId={id}
+                    ticketNumber={t.number}
+                    branchId={branchId}
+                    status={t.status}
+                  />
                   <Link
                     href={`/tickets/${id}`}
                     className={buttonVariants({ variant: "outline", size: "lg" })}
@@ -111,6 +134,32 @@ export default async function MyWorkPage() {
             )
           })}
         </ul>
+      )}
+
+      {meta.totalPages > 1 && (
+        <nav aria-label="Pagination" className="mt-4 flex items-center justify-between text-sm">
+          <span className="text-muted-foreground tabular-nums">
+            Page {meta.page} of {meta.totalPages} ({meta.total} tickets)
+          </span>
+          <span className="flex gap-2">
+            {meta.page > 1 && (
+              <Link
+                href={`?page=${meta.page - 1}`}
+                className={buttonVariants({ variant: "outline", size: "lg" })}
+              >
+                Newer
+              </Link>
+            )}
+            {meta.page < meta.totalPages && (
+              <Link
+                href={`?page=${meta.page + 1}`}
+                className={buttonVariants({ variant: "outline", size: "lg" })}
+              >
+                Older
+              </Link>
+            )}
+          </span>
+        </nav>
       )}
     </>
   )

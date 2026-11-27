@@ -1,11 +1,17 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useActionState, useEffect, useState, useTransition } from "react"
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+} from "react"
 import { FormField, FormMessage, FormSelect, FormTextarea, SubmitButton } from "@/components/form"
 import { Icon } from "@/components/icons"
 import { PhotoUpload } from "@/components/photo-upload"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -25,6 +31,23 @@ export type ChecklistRow = {
   note: string
 }
 
+type DraftMap = Record<string, { result: ChecklistRow["result"]; note: string }>
+
+const draftListeners = new Set<() => void>()
+function notifyDraftListeners() {
+  for (const cb of draftListeners) cb()
+}
+
+function subscribeDraft(cb: () => void) {
+  draftListeners.add(cb)
+  const onStorage = () => cb()
+  window.addEventListener("storage", onStorage)
+  return () => {
+    draftListeners.delete(cb)
+    window.removeEventListener("storage", onStorage)
+  }
+}
+
 /**
  * Mobile-friendly audit checklist runner with localStorage offline draft auto-save (F-7.2).
  * Registers the PWA service worker on mount when supported.
@@ -41,24 +64,32 @@ export function AuditChecklistRunner({
   completed: boolean
 }) {
   const storageKey = `qrfeed.audit.draft.${auditId}`
-  const [items, setItems] = useState<ChecklistRow[]>(() => {
-    if (typeof window === "undefined") return initialItems
+  const readDraft = useCallback(() => {
     try {
-      const saved = localStorage.getItem(storageKey)
-      if (!saved) return initialItems
-      const parsed = JSON.parse(saved) as Record<
-        string,
-        { result: ChecklistRow["result"]; note: string }
-      >
-      return initialItems.map((row) =>
-        parsed[row.itemId] ? { ...row, ...parsed[row.itemId] } : row,
-      )
+      return localStorage.getItem(storageKey)
     } catch {
-      return initialItems
+      return null
     }
-  })
-  const [dirty, setDirty] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+  }, [storageKey])
+  const draftRaw = useSyncExternalStore(subscribeDraft, readDraft, () => null)
+
+  let parsedDraft: DraftMap | null = null
+  if (!completed && draftRaw) {
+    try {
+      parsedDraft = JSON.parse(draftRaw) as DraftMap
+    } catch {
+      parsedDraft = null
+    }
+  }
+
+  const items: ChecklistRow[] = parsedDraft
+    ? initialItems.map((row) =>
+        parsedDraft[row.itemId] ? { ...row, ...parsedDraft[row.itemId] } : row,
+      )
+    : initialItems
+  const dirty = !completed && parsedDraft !== null
+
+  const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null)
   const [pending, startTransition] = useTransition()
 
   useEffect(() => {
@@ -67,63 +98,113 @@ export function AuditChecklistRunner({
     }
   }, [])
 
+  // Auto-sync any pending offline draft as soon as connectivity returns.
+  useEffect(() => {
+    if (!dirty || !editable || completed) return
+    const onOnline = () => {
+      startTransition(async () => {
+        try {
+          const res = await saveChecklistAction(
+            auditId,
+            items.map((i) => ({ itemId: i.itemId, result: i.result, note: i.note })),
+          )
+          if (res?.ok) {
+            try {
+              localStorage.removeItem(storageKey)
+            } catch {
+              // Ignore storage errors
+            }
+            notifyDraftListeners()
+            setMessage({
+              text: `Reconnected and synced! Score: ${res.data.scorePct === null ? "pending" : `${res.data.scorePct}%`}`,
+              isError: false,
+            })
+          }
+        } catch {
+          // Still offline; keep local draft intact
+        }
+      })
+    }
+    window.addEventListener("online", onOnline)
+    return () => window.removeEventListener("online", onOnline)
+  }, [auditId, completed, dirty, editable, items, storageKey])
+
+  function clearLocalDraft() {
+    try {
+      localStorage.removeItem(storageKey)
+    } catch {
+      // Ignore storage errors
+    }
+    notifyDraftListeners()
+  }
+
   function updateItem(itemId: string, patch: Partial<Pick<ChecklistRow, "result" | "note">>) {
-    setItems((prev) => {
-      const next = prev.map((r) => (r.itemId === itemId ? { ...r, ...patch } : r))
-      try {
-        const draft = Object.fromEntries(
-          next.map((r) => [r.itemId, { result: r.result, note: r.note }]),
-        )
-        localStorage.setItem(storageKey, JSON.stringify(draft))
-      } catch {
-        // Ignore storage quota errors
-      }
-      return next
-    })
-    setDirty(true)
+    const next = items.map((r) => (r.itemId === itemId ? { ...r, ...patch } : r))
+    try {
+      const draft: DraftMap = Object.fromEntries(
+        next.map((r) => [r.itemId, { result: r.result, note: r.note }]),
+      )
+      localStorage.setItem(storageKey, JSON.stringify(draft))
+    } catch {
+      // Ignore storage quota errors
+    }
+    notifyDraftListeners()
     setMessage(null)
   }
 
   function syncDraft() {
     setMessage(null)
     startTransition(async () => {
-      const res = await saveChecklistAction(
-        auditId,
-        items.map((i) => ({ itemId: i.itemId, result: i.result, note: i.note })),
-      )
-      if (res && res.ok) {
-        try {
-          localStorage.removeItem(storageKey)
-        } catch {
-          // Ignore
-        }
-        setDirty(false)
-        setMessage(
-          `Synced! Current score: ${res.data.scorePct === null ? "pending" : `${res.data.scorePct}%`}`,
+      try {
+        const res = await saveChecklistAction(
+          auditId,
+          items.map((i) => ({ itemId: i.itemId, result: i.result, note: i.note })),
         )
-      } else if (res) {
-        setMessage(res.error.message)
+        if (res && res.ok) {
+          clearLocalDraft()
+          setMessage({
+            text: `Synced! Current score: ${res.data.scorePct === null ? "pending" : `${res.data.scorePct}%`}`,
+            isError: false,
+          })
+        } else if (res) {
+          setMessage({ text: res.error.message, isError: true })
+        }
+      } catch {
+        setMessage({
+          text: "Offline or network error — draft stays saved locally.",
+          isError: true,
+        })
       }
     })
   }
 
   function finishAudit() {
+    setMessage(null)
     startTransition(async () => {
-      await saveChecklistAction(
-        auditId,
-        items.map((i) => ({ itemId: i.itemId, result: i.result, note: i.note })),
-      )
-      const res = await completeAuditAction(auditId)
-      if (res && res.ok) {
-        try {
-          localStorage.removeItem(storageKey)
-        } catch {
-          // Ignore
+      try {
+        const saved = await saveChecklistAction(
+          auditId,
+          items.map((i) => ({ itemId: i.itemId, result: i.result, note: i.note })),
+        )
+        if (!saved?.ok) {
+          setMessage({
+            text: saved?.error.message ?? "Could not save checklist before completing.",
+            isError: true,
+          })
+          return
         }
-        setDirty(false)
-        setMessage("Audit marked completed.")
-      } else if (res) {
-        setMessage(res.error.message)
+        const res = await completeAuditAction(auditId)
+        if (res && res.ok) {
+          clearLocalDraft()
+          setMessage({ text: "Audit marked completed.", isError: false })
+        } else if (res) {
+          setMessage({ text: res.error.message, isError: true })
+        }
+      } catch {
+        setMessage({
+          text: "Could not reach server to complete audit. Draft remains saved locally.",
+          isError: true,
+        })
       }
     })
   }
@@ -182,6 +263,7 @@ export function AuditChecklistRunner({
             <Input
               value={row.note}
               disabled={!editable || completed}
+              aria-label={`Observation note for clause ${row.clause}`}
               onChange={(e) => updateItem(row.itemId, { note: e.target.value })}
               placeholder="Observation note (optional)…"
               className="mt-3 h-10 text-sm"
@@ -190,7 +272,16 @@ export function AuditChecklistRunner({
         ))}
       </ul>
 
-      {message && <p className="text-sm font-medium text-success">{message}</p>}
+      {message && (
+        <p
+          className={cn(
+            "text-sm font-medium",
+            message.isError ? "text-destructive" : "text-success",
+          )}
+        >
+          {message.text}
+        </p>
+      )}
 
       {editable && !completed && (
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -207,9 +298,17 @@ export function AuditChecklistRunner({
 }
 
 export function AddFindingForm({ auditId, branchId }: { auditId: string; branchId: string }) {
-  const [state, action] = useActionState(createFindingAction, null)
+  const [resetKey, setResetKey] = useState(0)
+  const [state, action] = useActionState(
+    async (prev: Awaited<ReturnType<typeof createFindingAction>>, fd: FormData) => {
+      const res = await createFindingAction(prev, fd)
+      if (res?.ok) setResetKey((k) => k + 1)
+      return res
+    },
+    null,
+  )
   return (
-    <form action={action} className="space-y-4 rounded-xl border bg-muted/20 p-4">
+    <form key={resetKey} action={action} className="space-y-4 rounded-xl border bg-muted/20 p-4">
       <input type="hidden" name="auditId" value={auditId} />
       <p className="text-sm font-semibold">Log a finding / NCR</p>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -257,38 +356,31 @@ export function AddFindingForm({ auditId, branchId }: { auditId: string; branchI
 export function ConvertFindingButton({
   auditId,
   findingId,
-  rcaId,
 }: {
   auditId: string
   findingId: string
-  rcaId: string | null
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
-  if (rcaId) {
-    return (
-      <Badge
-        variant="success"
-        className="cursor-pointer"
-        onClick={() => router.push(`/rca/${rcaId}`)}
-      >
-        RCA linked →
-      </Badge>
-    )
-  }
+  const [error, setError] = useState<string | null>(null)
   return (
-    <Button
-      size="sm"
-      variant="secondary"
-      loading={pending}
-      onClick={() =>
-        startTransition(async () => {
-          const res = await convertFindingToRcaAction(auditId, findingId)
-          if (res && res.ok) router.push(`/rca/${res.data.rcaId}`)
-        })
-      }
-    >
-      <Icon name="rca" data-icon="inline-start" /> Create NCR / RCA
-    </Button>
+    <div className="flex flex-col items-end gap-1">
+      <Button
+        size="sm"
+        variant="secondary"
+        loading={pending}
+        onClick={() => {
+          setError(null)
+          startTransition(async () => {
+            const res = await convertFindingToRcaAction(auditId, findingId)
+            if (res && res.ok) router.push(`/rca/${res.data.rcaId}`)
+            else if (res) setError(res.error.message)
+          })
+        }}
+      >
+        <Icon name="rca" data-icon="inline-start" /> Create NCR / RCA
+      </Button>
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
   )
 }

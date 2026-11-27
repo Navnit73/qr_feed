@@ -20,14 +20,22 @@ export type NewDoc<T extends TenantDoc> = Omit<T, keyof TenantDoc> & { _id?: Obj
 type Opts = { session?: ClientSession }
 
 export type ScopedRepository<T extends TenantDoc> = {
-  find(filter: Filter<T>, opts?: Opts & { sort?: Sort; limit?: number }): Promise<T[]>
-  findOne(filter: Filter<T>, opts?: Opts & { sort?: Sort }): Promise<T | null>
-  findById(id: ObjectId | string, opts?: Opts): Promise<T | null>
+  find(
+    filter: Filter<T>,
+    opts?: Opts & { sort?: Sort; limit?: number; projection?: Document },
+  ): Promise<T[]>
+  findOne(
+    filter: Filter<T>,
+    opts?: Opts & { sort?: Sort; projection?: Document },
+  ): Promise<T | null>
+  findById(id: ObjectId | string, opts?: Opts & { projection?: Document }): Promise<T | null>
   count(filter: Filter<T>, opts?: Opts): Promise<number>
   paginate(
     filter: Filter<T>,
-    opts: Opts & { page?: number; pageSize?: number; sort?: Sort },
+    opts: Opts & { page?: number; pageSize?: number; sort?: Sort; projection?: Document },
   ): Promise<{ items: T[]; meta: PageMeta }>
+  /** Runs an aggregation pipeline with tenant + branch scope automatically prepended as $match. */
+  aggregate<R extends Document = Document>(pipeline: Document[], opts?: Opts): Promise<R[]>
   insertOne(doc: NewDoc<T>, opts?: Opts): Promise<T>
   /** Returns the updated document, or null when nothing in scope matched. */
   updateOne(filter: Filter<T>, update: UpdateFilter<T>, opts?: Opts): Promise<T | null>
@@ -78,6 +86,11 @@ function touchedKeys(update: Document): string[] {
     if (!op.startsWith("$")) throw new Error("Replacement updates are not allowed; use operators.")
     if (UPDATE_OPERATORS_THAT_WRITE.includes(op) && value && typeof value === "object") {
       keys.push(...Object.keys(value))
+      if (op === "$rename") {
+        for (const target of Object.values(value)) {
+          if (typeof target === "string") keys.push(target)
+        }
+      }
     }
   }
   return keys
@@ -148,7 +161,10 @@ export function defineRepository<T extends TenantDoc>(
 
       return {
         find: (filter, opts = {}) => {
-          const cursor = collection().find(scope(filter), { session: opts.session })
+          const cursor = collection().find(scope(filter), {
+            session: opts.session,
+            projection: opts.projection,
+          })
           if (opts.sort) cursor.sort(opts.sort)
           if (opts.limit) cursor.limit(opts.limit)
           return cursor.toArray() as Promise<T[]>
@@ -158,6 +174,7 @@ export function defineRepository<T extends TenantDoc>(
           collection().findOne(scope(filter), {
             session: opts.session,
             sort: opts.sort,
+            projection: opts.projection,
           }) as Promise<T | null>,
 
         findById: async (id, opts = {}) => {
@@ -165,18 +182,21 @@ export function defineRepository<T extends TenantDoc>(
           const _id = typeof id === "string" ? new ObjectId(id) : id
           return collection().findOne(scope({ _id } as Filter<T>), {
             session: opts.session,
+            projection: opts.projection,
           }) as Promise<T | null>
         },
 
         count: (filter, opts = {}) =>
           collection().countDocuments(scope(filter), { session: opts.session }),
 
-        paginate: async (filter, { page = 1, pageSize = 20, sort, session } = {}) => {
-          const safePage = Math.max(1, Math.floor(page))
-          const size = Math.min(100, Math.max(1, Math.floor(pageSize)))
+        paginate: async (filter, { page = 1, pageSize = 20, sort, projection, session } = {}) => {
+          const safePage = Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1
+          const size = Number.isFinite(pageSize)
+            ? Math.min(100, Math.max(1, Math.floor(pageSize)))
+            : 20
           const [items, total] = await Promise.all([
             collection()
-              .find(scope(filter), { session })
+              .find(scope(filter), { session, projection })
               .sort(sort ?? { _id: -1 })
               .skip((safePage - 1) * size)
               .limit(size)
@@ -184,6 +204,11 @@ export function defineRepository<T extends TenantDoc>(
             collection().countDocuments(scope(filter), { session }),
           ])
           return { items, meta: pageMeta({ total, page: safePage, pageSize: size }) }
+        },
+
+        aggregate: <R extends Document = Document>(pipeline: Document[], opts: Opts = {}) => {
+          const scopedPipeline = [{ $match: scope({}) }, ...pipeline]
+          return collection().aggregate<R>(scopedPipeline, { session: opts.session }).toArray()
         },
 
         insertOne: async (doc, opts = {}) => {

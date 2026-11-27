@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
+import type { ApiError } from "@/lib/api/errors"
 import { verifyChain } from "@/server/audit/audit-log"
 import { resolveTenantContext } from "@/server/auth/context"
+import { createBranch } from "@/server/modules/branches"
 import { listCategories } from "@/server/modules/categories"
 import { submitFeedback } from "@/server/modules/intake"
 import { createLocation } from "@/server/modules/locations"
+import { acceptInvite, createInvite } from "@/server/modules/members"
 import { createOrganization } from "@/server/modules/onboarding"
 import { createQrCode } from "@/server/modules/qr-codes"
 import {
@@ -144,5 +147,83 @@ describe("Phase 6 RCA & CAPA module (F-6.1–F-6.7)", () => {
 
     const chain = await verifyChain(ctx)
     expect(chain.ok).toBe(true)
+  })
+
+  it("enforces branch scope on RCAs, validates CAPA dates, and locks verified CAPAs", async () => {
+    const { tenant, branch } = await createOrganization(
+      { id: "admin-rca2", email: "admin2@rca.test", name: "Admin 2" },
+      { orgName: "Branch Org", industry: "clinic", branchName: "Branch A", timezone: "UTC" },
+    )
+    const ctx = (await resolveTenantContext("admin-rca2", tenant._id))!
+    const branchB = await createBranch(ctx, { name: "Branch B", timezone: "UTC" })
+
+    const locA = await createLocation(ctx, {
+      branchId: branch._id,
+      type: "location",
+      name: "Room 1",
+    })
+    const qrA = await createQrCode(ctx, locA._id)
+    const cats = await listCategories(ctx, "clinic")
+    const sub = await submitFeedback(
+      qrA.shortCode,
+      { categoryId: cats[0]._id.toHexString(), description: "Leak", consent: "on" },
+      { ip: "127.0.0.1", limits: null },
+    )
+    const ticket = (await queryTickets(ctx, { q: sub.number })).items[0]
+
+    const rca = await createRca(ctx, {
+      title: "Branch A RCA",
+      method: "5why",
+      problemStatement: "Leak in Branch A",
+      sourceTicketIds: [ticket._id.toHexString()],
+    })
+
+    // Invalid CAPA dueDate rejected cleanly
+    await expect(
+      createCapa(ctx, {
+        rcaId: rca._id.toHexString(),
+        title: "Bad date CAPA",
+        type: "corrective",
+        effectivenessDueDays: 30,
+        effectivenessMethod: "Check",
+        actions: [{ title: "Fix", ownerId: "admin-rca2", dueDate: "not-a-date" }],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION" } satisfies Partial<ApiError>)
+
+    const capa = await createCapa(ctx, {
+      rcaId: rca._id.toHexString(),
+      title: "Valid CAPA",
+      type: "corrective",
+      effectivenessDueDays: 30,
+      effectivenessMethod: "Check",
+      actions: [
+        {
+          title: "Fix",
+          ownerId: "admin-rca2",
+          dueDate: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      ],
+    })
+    await verifyCapaEffectiveness(ctx, capa._id, {
+      recurred: false,
+      result: "effective",
+      evidence: "Verified ok",
+    })
+    // Verified CAPA actions cannot be mutated
+    await expect(
+      updateCapaActionStatus(ctx, capa._id, capa.actions[0].id, "open"),
+    ).rejects.toMatchObject({ code: "CONFLICT" } satisfies Partial<ApiError>)
+
+    // Branch B admin cannot view Branch A's RCA
+    const inv = await createInvite(ctx, {
+      email: "b@rca.test",
+      roles: ["branch_admin"],
+      branchIds: [branchB._id.toHexString()],
+    })
+    await acceptInvite({ id: "u-branch-b", email: "b@rca.test", name: "Branch B Admin" }, inv.token)
+    const ctxB = (await resolveTenantContext("u-branch-b", tenant._id))!
+    await expect(getRcaDetail(ctxB, rca._id)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    } satisfies Partial<ApiError>)
   })
 })

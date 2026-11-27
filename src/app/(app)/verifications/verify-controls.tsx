@@ -10,9 +10,11 @@ import { quickTransitionAction, transitionTicketAction } from "@/app/(app)/ticke
 export function VerifyQueueControls({
   ticketId,
   ticketNumber,
+  canReopen = true,
 }: {
   ticketId: string
   ticketNumber: string
+  canReopen?: boolean
 }) {
   const [reopenOpen, setReopenOpen] = useState(false)
   const [pending, startTransition] = useTransition()
@@ -35,19 +37,21 @@ export function VerifyQueueControls({
         <Button size="lg" loading={pending} onClick={approve}>
           <Icon name="verify" data-icon="inline-start" /> Approve &amp; close
         </Button>
-        <Modal
-          open={reopenOpen}
-          onOpenChange={setReopenOpen}
-          title={`Reopen ${ticketNumber}`}
-          description="Give clear instructions so staff know what still needs work."
-          trigger={
-            <Button variant="warning" size="lg">
-              <Icon name="reopen" data-icon="inline-start" /> Reopen
-            </Button>
-          }
-        >
-          {reopenOpen && <ReopenForm ticketId={ticketId} onDone={() => setReopenOpen(false)} />}
-        </Modal>
+        {canReopen && (
+          <Modal
+            open={reopenOpen}
+            onOpenChange={setReopenOpen}
+            title={`Reopen ${ticketNumber}`}
+            description="Give clear instructions so staff know what still needs work."
+            trigger={
+              <Button variant="warning" size="lg">
+                <Icon name="reopen" data-icon="inline-start" /> Reopen
+              </Button>
+            }
+          >
+            {reopenOpen && <ReopenForm ticketId={ticketId} onDone={() => setReopenOpen(false)} />}
+          </Modal>
+        )}
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>

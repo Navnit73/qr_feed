@@ -5,8 +5,13 @@ import { useActionState, useEffect, useState } from "react"
 import { FormField, FormMessage, FormSelect, FormTextarea, SubmitButton } from "@/components/form"
 import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
+import { useSweetAlert } from "@/components/sweet-alert"
 import { Button } from "@/components/ui/button"
-import { createAuditTemplateAction, scheduleAuditAction } from "./actions"
+import {
+  createAuditTemplateAction,
+  deleteAuditTemplateAction,
+  scheduleAuditAction,
+} from "./actions"
 
 type Opt = { value: string; label: string }
 
@@ -79,9 +84,11 @@ function TemplateForm({ onDone }: { onDone: () => void }) {
 export function ScheduleAuditDialog({
   branches,
   templates,
+  auditors = [],
 }: {
   branches: Opt[]
   templates: Opt[]
+  auditors?: Opt[]
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -104,6 +111,7 @@ export function ScheduleAuditDialog({
         <ScheduleAuditForm
           branches={branches}
           templates={templates}
+          auditors={auditors}
           onDone={(id) => {
             setOpen(false)
             if (id) router.push(`/audits/${id}`)
@@ -117,10 +125,12 @@ export function ScheduleAuditDialog({
 function ScheduleAuditForm({
   branches,
   templates,
+  auditors,
   onDone,
 }: {
   branches: Opt[]
   templates: Opt[]
+  auditors: Opt[]
   onDone: (id?: string) => void
 }) {
   const [state, action] = useActionState(scheduleAuditAction, null)
@@ -147,6 +157,14 @@ function ScheduleAuditForm({
           state={state}
         />
       </div>
+      {auditors.length > 0 && (
+        <FormSelect
+          label="Assigned auditor"
+          name="auditorId"
+          options={[{ value: "", label: "Myself" }, ...auditors]}
+          state={state}
+        />
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <FormField
           label="Scheduled date"
@@ -177,5 +195,32 @@ function ScheduleAuditForm({
         <SubmitButton>Schedule audit</SubmitButton>
       </div>
     </form>
+  )
+}
+
+export function DeleteTemplateButton({ id, name }: { id: string; name: string }) {
+  const swal = useSweetAlert()
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      className="text-muted-foreground hover:text-destructive"
+      onClick={() =>
+        swal.fire({
+          tone: "warning",
+          title: `Delete template "${name}"?`,
+          text: "Existing audit runs keep their snapshot checklist; this template won't appear for new audits.",
+          confirmText: "Delete",
+          cancelText: "Keep it",
+          confirmVariant: "destructive",
+          onConfirm: async () => {
+            const res = await deleteAuditTemplateAction(id)
+            if (res && !res.ok) throw new Error(res.error.message)
+          },
+        })
+      }
+    >
+      Delete
+    </Button>
   )
 }

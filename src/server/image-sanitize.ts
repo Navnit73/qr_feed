@@ -45,12 +45,12 @@ export function sanitizeImage(raw: Buffer, maxBytes = MAX_IMAGE_BYTES): Sanitize
 function stripJpegMetadata(buf: Buffer): Buffer {
   const parts: Buffer[] = [buf.subarray(0, 2)] // SOI (FF D8)
   let offset = 2
+  let sawSos = false
+  let sawEoi = false
 
   while (offset + 1 < buf.length) {
     if (buf[offset] !== 0xff) {
-      // Unexpected padding or entropy data — copy remainder safely
-      parts.push(buf.subarray(offset))
-      break
+      throw new ApiError("VALIDATION", "This JPEG image appears corrupted.")
     }
     // Skip repeated 0xFF fill bytes
     while (offset < buf.length && buf[offset] === 0xff) offset++
@@ -61,6 +61,7 @@ function stripJpegMetadata(buf: Buffer): Buffer {
     // Standalone markers without length: EOI (D9), TEM (01), RST0-7 (D0-D7)
     if (marker === 0xd9) {
       parts.push(Buffer.from([0xff, 0xd9]))
+      sawEoi = true
       break
     }
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
@@ -68,19 +69,44 @@ function stripJpegMetadata(buf: Buffer): Buffer {
       continue
     }
 
-    // Start of Scan (DA): header followed by raw entropy-coded scan until EOI
-    if (marker === 0xda) {
-      parts.push(Buffer.from([0xff, 0xda]), buf.subarray(offset))
-      break
+    if (offset + 2 > buf.length) {
+      throw new ApiError("VALIDATION", "This JPEG image appears corrupted.")
     }
-
-    if (offset + 2 > buf.length) break
     const length = buf.readUInt16BE(offset)
     if (length < 2 || offset + length > buf.length) {
       throw new ApiError("VALIDATION", "This JPEG image appears corrupted.")
     }
-
     const segmentEnd = offset + length
+
+    // Start of Scan (DA): header followed by entropy-coded scan until the next non-RST marker
+    if (marker === 0xda) {
+      sawSos = true
+      let scanPos = segmentEnd
+      while (scanPos < buf.length) {
+        if (buf[scanPos] !== 0xff) {
+          scanPos++
+          continue
+        }
+        let next = scanPos + 1
+        while (next < buf.length && buf[next] === 0xff) next++
+        if (next >= buf.length) {
+          scanPos = buf.length
+          break
+        }
+        const m = buf[next]
+        // Byte-stuffed literal 0xFF (FF 00) and restart markers (FF D0..D7) belong to scan data
+        if (m === 0x00 || (m >= 0xd0 && m <= 0xd7)) {
+          scanPos = next + 1
+          continue
+        }
+        // Any other marker ends this scan
+        break
+      }
+      parts.push(Buffer.from([0xff, 0xda]), buf.subarray(offset, scanPos))
+      offset = scanPos
+      continue
+    }
+
     // Drop APP1 (E1: EXIF/XMP/GPS), APP2-APP15 (E2-EF: ICC/IPTC/Adobe), COM (FE: comments).
     // Keep APP0 (E0: JFIF) and all decoding tables / frame headers.
     const isMetadata = (marker >= 0xe1 && marker <= 0xef) || marker === 0xfe
@@ -90,6 +116,9 @@ function stripJpegMetadata(buf: Buffer): Buffer {
     offset = segmentEnd
   }
 
+  if (!sawSos || !sawEoi) {
+    throw new ApiError("VALIDATION", "This JPEG image appears corrupted.")
+  }
   return Buffer.concat(parts)
 }
 
@@ -125,6 +154,7 @@ function stripPngMetadata(buf: Buffer): Buffer {
 function stripWebpMetadata(buf: Buffer): Buffer {
   const chunks: Buffer[] = []
   let offset = 12 // Skip "RIFF" + size + "WEBP"
+  let hasImageChunk = false
 
   while (offset + 8 <= buf.length) {
     const fourcc = buf.subarray(offset, offset + 4).toString("ascii")
@@ -135,6 +165,7 @@ function stripWebpMetadata(buf: Buffer): Buffer {
       throw new ApiError("VALIDATION", "This WebP image appears corrupted.")
     }
 
+    if (fourcc === "VP8 " || fourcc === "VP8L" || fourcc === "VP8X") hasImageChunk = true
     if (fourcc !== "EXIF" && fourcc !== "XMP ") {
       const slice = Buffer.from(buf.subarray(offset, chunkEnd))
       // Clear EXIF (bit 3) and XMP (bit 2) flags in VP8X extended header if present.
@@ -144,6 +175,10 @@ function stripWebpMetadata(buf: Buffer): Buffer {
       chunks.push(slice)
     }
     offset = chunkEnd
+  }
+
+  if (!hasImageChunk) {
+    throw new ApiError("VALIDATION", "This WebP image appears corrupted.")
   }
 
   const payload = Buffer.concat([Buffer.from("WEBP", "ascii"), ...chunks])

@@ -16,6 +16,16 @@ const schema = z.object({
     .string({ error: "is required (generate one with: openssl rand -base64 32)" })
     .min(32, "must be at least 32 characters"),
   BETTER_AUTH_URL: z.url({ error: "must be the app's public URL, e.g. http://localhost:3000" }),
+  /** Optional comma-separated extra trusted origins (e.g. custom domains, preview URLs). */
+  BETTER_AUTH_TRUSTED_ORIGINS: z
+    .string()
+    .default("")
+    .transform((s) =>
+      s
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean),
+    ),
   /** Comma-separated emails that may use the super-admin console. */
   SUPER_ADMIN_EMAILS: z
     .string()

@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import { ObjectId } from "mongodb"
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { PanelCard } from "@/components/cards/panel-card"
@@ -9,8 +10,10 @@ import { Icon } from "@/components/icons"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
+import { SEVERITY_BADGE } from "@/lib/ticket-display"
 import { cn } from "@/lib/utils"
 import { requireTenantContext } from "@/server/auth/session"
+import { inBranchScope } from "@/server/db/tenant-context"
 import { listBranches } from "@/server/modules/branches"
 import { getAnalyticsReport, listSavedReports } from "@/server/modules/reports"
 import { can } from "@/server/rbac/ability"
@@ -23,8 +26,14 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
   if (!can(ctx, "report:read")) redirect("/dashboard")
 
   const sp = await searchParams
-  const rangeDays = Math.min(365, Math.max(1, Number(sp.days) || 30))
-  const branchId = typeof sp.branchId === "string" && sp.branchId ? sp.branchId : undefined
+  const rawDays = Number(sp.days)
+  const rangeDays = Number.isFinite(rawDays) ? Math.min(365, Math.max(1, Math.floor(rawDays))) : 30
+  const branchId =
+    typeof sp.branchId === "string" &&
+    ObjectId.isValid(sp.branchId) &&
+    inBranchScope(ctx.branchScope, new ObjectId(sp.branchId))
+      ? sp.branchId
+      : undefined
 
   const [report, branches, saved] = await Promise.all([
     getAnalyticsReport(ctx, { rangeDays, branchId }),
@@ -46,19 +55,31 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
             {canExport && (
               <>
                 <a
-                  href={`/api/reports/export?type=tickets&days=${rangeDays}`}
+                  href={`/api/reports/export?type=tickets&days=${rangeDays}${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ""}`}
                   className={buttonVariants({ variant: "outline", size: "lg" })}
                 >
                   <Icon name="download" data-icon="inline-start" /> Export Tickets CSV
                 </a>
                 <a
-                  href={`/api/reports/export?type=summary&days=${rangeDays}`}
+                  href={`/api/reports/export?type=tickets&format=excel&days=${rangeDays}${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ""}`}
+                  className={buttonVariants({ variant: "outline", size: "lg" })}
+                >
+                  Excel
+                </a>
+                <a
+                  href={`/api/reports/export?type=summary&days=${rangeDays}${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ""}`}
                   className={buttonVariants({ variant: "outline", size: "lg" })}
                 >
                   Branch CSV
                 </a>
               </>
             )}
+            <Link
+              href={`/print/reports?days=${rangeDays}${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ""}`}
+              className={buttonVariants({ variant: "outline", size: "lg" })}
+            >
+              <Icon name="print" data-icon="inline-start" /> PDF
+            </Link>
             <SaveReportDialog
               branches={branchOpts}
               defaultDays={rangeDays}
@@ -171,6 +192,21 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
         </PanelCard>
       </div>
 
+      {report.ratingTrend.some((r) => r.rated > 0) && (
+        <PanelCard
+          className="mb-6"
+          title="Average guest rating trend"
+          description="Daily mean star rating across submitted QR feedback."
+        >
+          <AreaTrend
+            title="Average guest rating per day"
+            data={report.ratingTrend}
+            xKey="label"
+            series={[{ key: "rating", label: "Avg rating" }]}
+          />
+        </PanelCard>
+      )}
+
       {/* Location Heatmap + Repeat issues */}
       <div className="mb-6 grid gap-6 lg:grid-cols-3">
         <PanelCard
@@ -205,7 +241,11 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
                         {h.high > 0 ? <Badge variant="warning">{h.high}</Badge> : "0"}
                       </td>
                       <td className="px-3 py-2 tabular-nums">
-                        {h.medium > 0 ? <Badge variant="secondary">{h.medium}</Badge> : "0"}
+                        {h.medium > 0 ? (
+                          <Badge variant={SEVERITY_BADGE.medium}>{h.medium}</Badge>
+                        ) : (
+                          "0"
+                        )}
                       </td>
                       <td className="px-3 py-2 text-muted-foreground tabular-nums">{h.low}</td>
                     </tr>
@@ -269,7 +309,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
           ) : (
             <ul className="divide-y text-sm">
               {report.staffWorkload.map((s) => (
-                <li key={s.name} className="flex items-center justify-between py-2.5">
+                <li key={s.userId} className="flex items-center justify-between py-2.5">
                   <span className="truncate font-medium">{s.name}</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
                     <strong className="text-foreground">{s.open}</strong> open · {s.closed} closed
@@ -331,6 +371,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
                 <SavedReportActions
                   id={r._id.toHexString()}
                   hasRecipients={r.recipients.length > 0}
+                  canExport={canExport}
                 />
               </li>
             ))}

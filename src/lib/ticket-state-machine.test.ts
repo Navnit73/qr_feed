@@ -201,4 +201,24 @@ describe("ticket state machine (F-3.4 / T-SM-1)", () => {
       "cancel",
     ])
   })
+
+  it("rejects unknown event types cleanly and resumes SLA when reassigning on_hold tickets", () => {
+    const unknown = transitionTicket(
+      snap({ status: "new" }),
+      { type: "bogus_event" } as never,
+      admin,
+    )
+    expect(unknown).toMatchObject({ ok: false, code: "VALIDATION" })
+
+    const reassignedHold = transitionTicket(
+      snap({ status: "on_hold", assigneeId: "u-staff" }),
+      { type: "assign", assigneeId: "u-other", reason: "Reassigned off hold" },
+      admin,
+    )
+    expect(reassignedHold).toMatchObject({
+      ok: true,
+      nextStatus: "assigned",
+      resumeSla: true,
+    })
+  })
 })

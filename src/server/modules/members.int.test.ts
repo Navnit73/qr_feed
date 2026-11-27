@@ -11,6 +11,7 @@ import {
   setMemberStatus,
   updateMemberAccess,
 } from "@/server/modules/members"
+import { createBranch } from "@/server/modules/branches"
 import { createOrganization } from "@/server/modules/onboarding"
 import { resolveAccess } from "@/server/rbac/ability"
 import { testContext, setupTestDb } from "@/test/db"
@@ -165,5 +166,42 @@ describe("members", () => {
     const m = await acceptInvite(newbie, token)
     await setMemberStatus(ctx, m._id, "inactive")
     expect(await resolveTenantContext(newbie.id, tenant._id)).toBeNull()
+  })
+
+  it("isolates branch admins from other branches' members and org-wide invites", async () => {
+    const { ctx, tenant, branch } = await setup()
+    const branch2 = await createBranch(ctx, { name: "Annex", timezone: "Asia/Kolkata" })
+
+    const invBranchAdmin = await createInvite(ctx, {
+      email: "ba@acme.test",
+      roles: ["branch_admin"],
+      branchIds: [branch._id.toHexString()],
+    })
+    await acceptInvite(
+      { id: "u-ba", email: "ba@acme.test", name: "Branch Admin" },
+      invBranchAdmin.token,
+    )
+
+    const invOtherStaff = await createInvite(ctx, {
+      email: "other@acme.test",
+      roles: ["l1_staff"],
+      branchIds: [branch2._id.toHexString()],
+    })
+    const otherStaff = await acceptInvite(
+      { id: "u-other-staff", email: "other@acme.test", name: "Other Staff" },
+      invOtherStaff.token,
+    )
+
+    const orgAdminInvite = await createInvite(ctx, {
+      email: "exec@acme.test",
+      roles: ["org_admin"],
+      branchIds: [],
+    })
+
+    const baCtx = (await resolveTenantContext("u-ba", tenant._id))!
+    expect((await listMembers(baCtx)).some((m) => m.userId === "u-other-staff")).toBe(false)
+    expect((await listInvites(baCtx)).some((i) => i.email === "exec@acme.test")).toBe(false)
+    expect(await codeOf(setMemberStatus(baCtx, otherStaff._id, "inactive"))).toBe("FORBIDDEN")
+    expect(await codeOf(revokeInvite(baCtx, orgAdminInvite.invite._id))).toBe("FORBIDDEN")
   })
 })

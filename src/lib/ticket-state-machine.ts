@@ -108,6 +108,14 @@ export function transitionTicket(
   event: TicketEvent,
   actor: TicketActor,
 ): TransitionResult {
+  if (!event || typeof event.type !== "string" || !Object.hasOwn(REQUIRED_PERMISSION, event.type)) {
+    return {
+      ok: false,
+      code: "VALIDATION",
+      message: "Unknown ticket action.",
+    }
+  }
+
   if (!hasAny(actor.permissions, REQUIRED_PERMISSION[event.type])) {
     return {
       ok: false,
@@ -142,6 +150,7 @@ export function transitionTicket(
         ok: true,
         nextStatus: "assigned",
         activityType: isReassign ? "ticket.reassigned" : "ticket.assigned",
+        ...(ticket.status === "on_hold" ? { resumeSla: true } : {}),
       }
     }
 

@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 import { Suspense } from "react"
 import { PrintButton } from "@/components/print-button"
 import { PageSkeleton } from "@/components/skeleton"
@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/api/errors"
 import { requireTenantContext } from "@/server/auth/session"
 import { getAuditDetail } from "@/server/modules/audits"
 import { getTenant } from "@/server/modules/tenants"
+import { can } from "@/server/rbac/ability"
 
 export const metadata: Metadata = { title: "Audit Report · QR Feed", robots: { index: false } }
 
@@ -16,7 +17,7 @@ const fmt = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "U
 
 export default function PrintAuditPage(props: PageProps<"/print/audits/[auditId]">) {
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+    <main className="mx-auto max-w-4xl bg-white px-4 py-8 text-black sm:px-6 print:max-w-none print:p-0">
       <Suspense fallback={<PageSkeleton />}>
         <PrintAuditBody {...props} />
       </Suspense>
@@ -26,11 +27,15 @@ export default function PrintAuditPage(props: PageProps<"/print/audits/[auditId]
 
 async function PrintAuditBody({ params }: PageProps<"/print/audits/[auditId]">) {
   const ctx = await requireTenantContext()
+  if (!can(ctx, "audit:read")) redirect("/dashboard")
   const { auditId } = await params
   const [tenant, detail] = await Promise.all([
     getTenant(ctx.tenantId),
     getAuditDetail(ctx, auditId).catch((err) => {
-      if (err instanceof ApiError && (err.code === "NOT_FOUND" || err.code === "VALIDATION")) {
+      if (
+        err instanceof ApiError &&
+        (err.code === "NOT_FOUND" || err.code === "VALIDATION" || err.code === "FORBIDDEN")
+      ) {
         notFound()
       }
       throw err
@@ -49,8 +54,9 @@ async function PrintAuditBody({ params }: PageProps<"/print/audits/[auditId]">) 
             {audit.number} · {audit.title}
           </h1>
           <p className="text-sm text-muted-foreground">
-            {branch?.name} · {audit.templateName} · Auditor: {audit.auditorName} ·{" "}
-            {fmt.format(audit.scheduledAt)} · Score:{" "}
+            {branch?.name} · {audit.templateName} · Auditor: {audit.auditorName} · Scheduled{" "}
+            {fmt.format(audit.scheduledAt)}
+            {audit.completedAt ? ` · Completed ${fmt.format(audit.completedAt)}` : ""} · Score:{" "}
             {audit.scorePct !== null && audit.scorePct !== undefined ? `${audit.scorePct}%` : "N/A"}
           </p>
         </div>
@@ -67,34 +73,36 @@ async function PrintAuditBody({ params }: PageProps<"/print/audits/[auditId]">) 
 
       <section className="space-y-2">
         <h2 className="text-base font-semibold">Checklist results</h2>
-        <table className="w-full rounded-xl border text-left text-xs">
-          <thead className="bg-muted">
-            <tr>
-              <th className="px-3 py-2">Clause</th>
-              <th className="px-3 py-2">Section</th>
-              <th className="px-3 py-2">Question</th>
-              <th className="px-3 py-2">Result</th>
-              <th className="px-3 py-2">Note</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {audit.checklistResults.map((r) => (
-              <tr key={r.itemId}>
-                <td className="px-3 py-2 font-mono">{r.clause}</td>
-                <td className="px-3 py-2">{r.section}</td>
-                <td className="px-3 py-2">{r.question}</td>
-                <td className="px-3 py-2 font-semibold uppercase">{r.result}</td>
-                <td className="px-3 py-2">{r.note ?? ""}</td>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[540px] rounded-xl border text-left text-xs">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="px-3 py-2">Clause</th>
+                <th className="px-3 py-2">Section</th>
+                <th className="px-3 py-2">Question</th>
+                <th className="px-3 py-2">Result</th>
+                <th className="px-3 py-2">Note</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y">
+              {audit.checklistResults.map((r) => (
+                <tr key={r.itemId}>
+                  <td className="px-3 py-2 font-mono">{r.clause}</td>
+                  <td className="px-3 py-2">{r.section}</td>
+                  <td className="px-3 py-2">{r.question}</td>
+                  <td className="px-3 py-2 font-semibold uppercase">{r.result}</td>
+                  <td className="px-3 py-2">{r.note ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="space-y-2">
         <h2 className="text-base font-semibold">Findings ({findings.length})</h2>
         {findings.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Zero non-conformities recorded.</p>
+          <p className="text-sm text-gray-600">Zero non-conformities recorded.</p>
         ) : (
           <ul className="divide-y rounded-xl border text-sm">
             {findings.map((f) => (
@@ -102,7 +110,20 @@ async function PrintAuditBody({ params }: PageProps<"/print/audits/[auditId]">) 
                 <p className="font-semibold capitalize">
                   {f.severity} · Clause {f.clause} ({f.status.replaceAll("_", " ")})
                 </p>
-                <p className="mt-1 text-muted-foreground">{f.description}</p>
+                <p className="mt-1 text-gray-700">{f.description}</p>
+                {f.evidence.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {f.evidence.map((aid) => (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        key={aid}
+                        src={`/api/files/${aid}`}
+                        alt={`Evidence for clause ${f.clause}`}
+                        className="size-20 rounded-lg border object-cover"
+                      />
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -8,7 +8,7 @@ import { timeAgo } from "@/lib/relative-time"
 import { cn } from "@/lib/utils"
 import { requireTenantContext } from "@/server/auth/session"
 import { listNotifications, unreadNotificationCount } from "@/server/modules/notifications"
-import { markAllReadAction } from "./actions"
+import { markAllReadAction, markOneReadAction } from "./actions"
 
 export const metadata: Metadata = { title: "Notifications · QR Feed" }
 
@@ -71,6 +71,21 @@ export default async function NotificationsPage() {
               </div>
               <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
                 <span>{timeAgo(n.createdAt, now)}</span>
+                {!n.readAt && (
+                  <form
+                    action={async () => {
+                      "use server"
+                      await markOneReadAction(n._id.toHexString())
+                    }}
+                  >
+                    <button
+                      type="submit"
+                      className="font-medium text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      Mark read
+                    </button>
+                  </form>
+                )}
                 {n.href && (
                   <Link href={n.href} className="font-medium text-primary hover:underline">
                     Open

@@ -17,6 +17,14 @@ export function SelectPlanButton({ plan, current }: { plan: PlanKey; current: bo
     )
   }
 
+  if (plan === "enterprise") {
+    return (
+      <Button variant="outline" size="lg" disabled className="w-full">
+        Contact sales
+      </Button>
+    )
+  }
+
   return (
     <div className="space-y-1">
       <Button

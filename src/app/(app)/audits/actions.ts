@@ -8,6 +8,7 @@ import {
   convertFindingToRca,
   createAuditFinding,
   createAuditTemplate,
+  deleteAuditTemplate,
   saveAuditChecklist,
   scheduleAudit,
 } from "@/server/modules/audits"
@@ -53,9 +54,18 @@ export async function scheduleAuditAction(
       title: String(raw.title ?? ""),
       recurrence: String(raw.recurrence || "once") as "once" | "weekly" | "monthly" | "quarterly",
       scheduledAt: String(raw.scheduledAt ?? new Date().toISOString()),
+      ...(raw.auditorId ? { auditorId: String(raw.auditorId) } : {}),
     })
     revalidatePath("/audits")
     return { id: doc._id.toHexString() }
+  })
+}
+
+export async function deleteAuditTemplateAction(id: string): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    await deleteAuditTemplate(ctx, id)
+    revalidatePath("/audits")
   })
 }
 

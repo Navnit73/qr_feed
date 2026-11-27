@@ -31,7 +31,7 @@ export function CreateQrButton({
   return (
     <Button
       variant="outline"
-      size="sm"
+      size="lg"
       loading={pending}
       aria-label={`Create QR for ${name}`}
       onClick={() =>
@@ -57,13 +57,15 @@ export function QrButton({
   name,
   path,
   branchId,
-  canManage,
+  canRegenerate,
+  canRevoke,
 }: {
   qr: QrInfo
   name: string
   path: string
   branchId: string
-  canManage: boolean
+  canRegenerate: boolean
+  canRevoke: boolean
 }) {
   const [open, setOpen] = useState(false)
   const swal = useSweetAlert()
@@ -96,8 +98,9 @@ export function QrButton({
       title={`QR code · ${name}`}
       description={`Scanned ${qr.scanCount} ${qr.scanCount === 1 ? "time" : "times"}.`}
       trigger={
-        <Button variant="outline" size="sm" aria-label={`QR code for ${name}`}>
-          <Icon name="qr" data-icon="inline-start" /> QR
+        <Button variant="secondary" size="lg" aria-label={`QR code for ${name}`}>
+          <Icon name="qr" data-icon="inline-start" />
+          <span className="max-sm:sr-only">QR</span>
         </Button>
       }
     >
@@ -137,19 +140,25 @@ export function QrButton({
             Download PNG
           </a>
         </div>
-        {canManage && (
+        {(canRegenerate || canRevoke) && (
           <div className="flex justify-between gap-2 border-t pt-4">
-            <Button variant="ghost" size="lg" onClick={() => confirm("regenerate")}>
-              Regenerate
-            </Button>
-            <Button
-              variant="ghost"
-              size="lg"
-              className="text-destructive"
-              onClick={() => confirm("revoke")}
-            >
-              Revoke
-            </Button>
+            {canRegenerate ? (
+              <Button variant="ghost" size="lg" onClick={() => confirm("regenerate")}>
+                Regenerate
+              </Button>
+            ) : (
+              <span />
+            )}
+            {canRevoke && (
+              <Button
+                variant="ghost"
+                size="lg"
+                className="text-destructive"
+                onClick={() => confirm("revoke")}
+              >
+                Revoke
+              </Button>
+            )}
           </div>
         )}
       </div>

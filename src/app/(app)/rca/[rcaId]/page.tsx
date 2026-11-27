@@ -15,7 +15,9 @@ import {
   AnalysisForm,
   ApprovalSignForm,
   CapaActionStatusButton,
+  CloseRcaButton,
   EffectivenessDialog,
+  LinkTicketDialog,
 } from "./rca-workspace"
 
 export const metadata: Metadata = { title: "RCA workspace · QR Feed" }
@@ -33,7 +35,10 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
   const { rcaId } = await params
 
   const detail = await getRcaDetail(ctx, rcaId).catch((err) => {
-    if (err instanceof ApiError && (err.code === "NOT_FOUND" || err.code === "VALIDATION")) {
+    if (
+      err instanceof ApiError &&
+      (err.code === "NOT_FOUND" || err.code === "VALIDATION" || err.code === "FORBIDDEN")
+    ) {
       notFound()
     }
     throw err
@@ -42,10 +47,25 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
   const { rca, capas, linkedTickets, members, suggestedRecurrenceCount } = detail
   const id = rca._id.toHexString()
   const memberOpts = members.map((m) => ({ value: m.userId, label: m.name }))
+  const isClosed = rca.status === "closed"
   const canManageRca = can(ctx, "rca:manage")
   const canManageCapa = can(ctx, "capa:manage")
   const canVerifyCapa = can(ctx, "capa:verify")
   const canApprove = can(ctx, "rca:approve")
+  const allCapasVerified =
+    capas.length > 0 && capas.every((c) => c.status === "verified" || c.status === "closed")
+  const canClose = (canApprove || canManageRca) && rca.status === "approved" && allCapasVerified
+
+  const hasAnalysis =
+    rca.whys.some((w) => w.trim().length > 0) ||
+    Object.values(rca.fishbone).some((arr) => arr.length > 0)
+  const steps = [
+    { label: "Problem", done: rca.problemStatement.trim().length > 0 },
+    { label: "Analysis", done: hasAnalysis },
+    { label: "Root cause", done: rca.rootCause.trim().length > 0 },
+    { label: "CAPA verified", done: allCapasVerified },
+    { label: "Approved", done: rca.status === "approved" || rca.status === "closed" },
+  ]
 
   return (
     <>
@@ -58,14 +78,38 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
           { label: rca.number },
         ]}
         actions={
-          <Link
-            href={`/print/rca/${id}`}
-            className={buttonVariants({ variant: "outline", size: "lg" })}
-          >
-            <Icon name="print" data-icon="inline-start" /> RCA/CAPA PDF
-          </Link>
+          <>
+            {canClose && <CloseRcaButton rcaId={id} number={rca.number} />}
+            <Link
+              href={`/print/rca/${id}`}
+              className={buttonVariants({ variant: "outline", size: "lg" })}
+            >
+              <Icon name="print" data-icon="inline-start" /> RCA/CAPA PDF
+            </Link>
+          </>
         }
       />
+
+      {/* Guided 5-step RCA workflow progress */}
+      <ol aria-label="RCA progress" className="mb-6 grid gap-2 sm:grid-cols-5">
+        {steps.map((s, idx) => (
+          <li
+            key={s.label}
+            className="flex items-center gap-2 rounded-xl border bg-card px-3 py-2.5 text-xs font-medium"
+          >
+            <span
+              className={
+                s.done
+                  ? "grid size-5 shrink-0 place-items-center rounded-full bg-success text-success-foreground"
+                  : "grid size-5 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground tabular-nums"
+              }
+            >
+              {s.done ? <Icon name="check" className="size-3.5" /> : idx + 1}
+            </span>
+            <span className="truncate">{s.label}</span>
+          </li>
+        ))}
+      </ol>
 
       <div className="mb-6 flex flex-wrap items-center gap-2">
         <Badge
@@ -83,6 +127,7 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
             Linked: {t.number}
           </Link>
         ))}
+        {canManageRca && !isClosed && <LinkTicketDialog rcaId={id} />}
       </div>
 
       <div className="space-y-6">
@@ -91,7 +136,7 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
           description="Problem statement, 5 Whys, Fishbone (Ishikawa 6M), contributing factors and root cause."
         >
           <AnalysisForm
-            editable={canManageRca}
+            editable={canManageRca && !isClosed}
             data={{
               id,
               method: rca.method,
@@ -107,7 +152,7 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
         <PanelCard
           title="CAPA Plans & Effectiveness"
           description="Correction, corrective and preventive actions with scheduled effectiveness verification."
-          action={canManageCapa && <AddCapaDialog rcaId={id} members={memberOpts} />}
+          action={canManageCapa && !isClosed && <AddCapaDialog rcaId={id} members={memberOpts} />}
         >
           {capas.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -138,7 +183,7 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
                         >
                           {c.status.replaceAll("_", " ")}
                         </Badge>
-                        {canVerifyCapa && c.status !== "verified" && (
+                        {canVerifyCapa && c.status !== "verified" && c.status !== "closed" && (
                           <EffectivenessDialog
                             rcaId={id}
                             capaId={cid}
@@ -161,7 +206,7 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
                               Owner: {act.ownerName} · Due {fmtDate.format(act.dueDate)}
                             </p>
                           </div>
-                          {canManageCapa ? (
+                          {canManageCapa && c.status !== "verified" && c.status !== "closed" ? (
                             <CapaActionStatusButton
                               rcaId={id}
                               capaId={cid}
@@ -228,7 +273,9 @@ export default async function RcaDetailPage({ params }: PageProps<"/rca/[rcaId]"
                 ))}
               </ol>
             )}
-            {canManageRca && <ApprovalSignForm rcaId={id} canApprove={canApprove} />}
+            {(canManageRca || canApprove) && !isClosed && (
+              <ApprovalSignForm rcaId={id} canManage={canManageRca} canApprove={canApprove} />
+            )}
           </div>
         </PanelCard>
       </div>

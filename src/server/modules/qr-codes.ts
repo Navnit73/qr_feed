@@ -37,29 +37,38 @@ async function insertCode(
   )
 }
 
+function isShortCodeCollision(err: unknown): boolean {
+  return isDuplicateKey(err) && String(err).includes("shortCode")
+}
+
 export async function createQrCode(ctx: TenantContext, locationIdRaw: ObjectId | string) {
+  assertCan(ctx, "qr:create")
   const loc = await findLocation(ctx, parseInput(objectId, locationIdRaw))
   assertCan(ctx, "qr:create", { branchId: loc.branchId })
-  try {
-    return await withTransaction(async (session) => {
-      const qr = await insertCode(ctx, loc, session)
-      await appendAudit(
-        ctx,
-        {
-          action: "qr.created",
-          entity: "qrCode",
-          entityId: qr._id,
-          after: { location: loc.path, shortCode: qr.shortCode },
-        },
-        { session },
-      )
-      return qr
-    })
-  } catch (err) {
-    if (isDuplicateKey(err))
-      throw new ApiError("CONFLICT", "This location already has an active QR code.")
-    throw err
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await withTransaction(async (session) => {
+        const qr = await insertCode(ctx, loc, session)
+        await appendAudit(
+          ctx,
+          {
+            action: "qr.created",
+            entity: "qrCode",
+            entityId: qr._id,
+            after: { location: loc.path, shortCode: qr.shortCode },
+          },
+          { session },
+        )
+        return qr
+      })
+    } catch (err) {
+      if (isShortCodeCollision(err) && attempt < 2) continue
+      if (isDuplicateKey(err))
+        throw new ApiError("CONFLICT", "This location already has an active QR code.")
+      throw err
+    }
   }
+  throw new ApiError("INTERNAL", "Could not allocate a unique QR code.")
 }
 
 /** One code for every leaf location in the branch that doesn't have one yet. */
@@ -101,16 +110,18 @@ async function findActive(ctx: TenantContext, idRaw: ObjectId | string) {
 }
 
 export async function revokeQrCode(ctx: TenantContext, idRaw: ObjectId | string) {
+  assertCan(ctx, "qr:revoke")
   const qr = await findActive(ctx, idRaw)
   assertCan(ctx, "qr:revoke", { branchId: qr.branchId })
   await withTransaction(async (session) => {
-    await qrCodes
+    const revoked = await qrCodes
       .forTenant(ctx)
       .updateOne(
-        { _id: qr._id },
+        { _id: qr._id, status: "active" },
         { $set: { status: "revoked", revokedAt: new Date() } },
         { session },
       )
+    if (!revoked) throw new ApiError("NOT_FOUND", "QR code is no longer active.")
     await appendAudit(
       ctx,
       {
@@ -126,18 +137,22 @@ export async function revokeQrCode(ctx: TenantContext, idRaw: ObjectId | string)
 
 /** Revokes a code (lost, defaced or photographed) and issues a fresh one for the same spot. */
 export async function regenerateQrCode(ctx: TenantContext, idRaw: ObjectId | string) {
+  assertCan(ctx, "qr:revoke")
+  assertCan(ctx, "qr:create")
   const qr = await findActive(ctx, idRaw)
   assertCan(ctx, "qr:revoke", { branchId: qr.branchId })
   assertCan(ctx, "qr:create", { branchId: qr.branchId })
+  const loc = await findLocation(ctx, qr.locationId)
   return withTransaction(async (session) => {
-    await qrCodes
+    const revoked = await qrCodes
       .forTenant(ctx)
       .updateOne(
-        { _id: qr._id },
+        { _id: qr._id, status: "active" },
         { $set: { status: "revoked", revokedAt: new Date() } },
         { session },
       )
-    const fresh = await insertCode(ctx, { _id: qr.locationId, branchId: qr.branchId }, session)
+    if (!revoked) throw new ApiError("CONFLICT", "QR code was already revoked.")
+    const fresh = await insertCode(ctx, { _id: loc._id, branchId: loc.branchId }, session)
     await appendAudit(
       ctx,
       {
@@ -160,6 +175,7 @@ export async function listQrCodes(ctx: TenantContext, branchIdRaw: ObjectId | st
 }
 
 export async function getQrCode(ctx: TenantContext, idRaw: ObjectId | string) {
+  assertCan(ctx, "qr:read")
   const qr = await findActive(ctx, idRaw)
   assertCan(ctx, "qr:read", { branchId: qr.branchId })
   const loc = await locations.forTenant({ ...ctx, branchScope: "all" }).findById(qr.locationId)
@@ -187,27 +203,70 @@ export type PublicQr = {
 }
 
 /**
- * What a scan resolves to. The code alone decides the tenant (never client input), and any
- * inactive link in the chain (code, tenant, branch, location) makes it a dead code.
+ * Lightweight QR check for public photo uploads: verifies code → tenant → branch → location
+ * without fetching categories.
  */
-export async function resolvePublicQr(shortCode: string): Promise<PublicQr | null> {
+export async function resolvePublicQrLite(shortCode: string): Promise<{
+  qrId: ObjectId
+  tenantId: ObjectId
+  branchId: ObjectId
+  locationId: ObjectId
+} | null> {
   if (!isShortCode(shortCode)) return null
-  const qr = await qrCodes.unscoped().findOne({ shortCode, status: "active" })
+  const qr = await qrCodes
+    .unscoped()
+    .findOne(
+      { shortCode, status: "active" },
+      { projection: { _id: 1, tenantId: 1, branchId: 1, locationId: 1 } },
+    )
   if (!qr) return null
-  const tenant = await tenantsCollection().findOne({ _id: qr.tenantId, status: "active" })
-  if (!tenant) return null
   const sys: TenantContext = {
-    tenantId: tenant._id,
+    tenantId: qr.tenantId,
     actorId: "public",
     roles: [],
     permissions: new Set(),
     branchScope: "all",
   }
-  const [loc, branch] = await Promise.all([
-    locations.forTenant(sys).findById(qr.locationId),
-    branches.forTenant(sys).findById(qr.branchId),
+  const [tenant, loc, branch] = await Promise.all([
+    tenantsCollection().findOne({ _id: qr.tenantId, status: "active" }, { projection: { _id: 1 } }),
+    locations.forTenant(sys).findById(qr.locationId, { projection: { status: 1 } }),
+    branches.forTenant(sys).findById(qr.branchId, { projection: { status: 1 } }),
   ])
-  if (!loc || loc.status !== "active" || !branch || branch.status !== "active") return null
+  if (!tenant || !loc || loc.status !== "active" || !branch || branch.status !== "active") {
+    return null
+  }
+  return { qrId: qr._id, tenantId: qr.tenantId, branchId: qr.branchId, locationId: qr.locationId }
+}
+
+/**
+ * What a scan resolves to. The code alone decides the tenant (never client input), and any
+ * inactive link in the chain (code, tenant, branch, location) makes it a dead code.
+ * Runs tenant, location, branch lookups in parallel (2 DB round-trips instead of 4).
+ */
+export async function resolvePublicQr(shortCode: string): Promise<PublicQr | null> {
+  if (!isShortCode(shortCode)) return null
+  const qr = await qrCodes.unscoped().findOne({ shortCode, status: "active" })
+  if (!qr) return null
+  const sys: TenantContext = {
+    tenantId: qr.tenantId,
+    actorId: "public",
+    roles: [],
+    permissions: new Set(),
+    branchScope: "all",
+  }
+  const [tenant, loc, branch] = await Promise.all([
+    tenantsCollection().findOne(
+      { _id: qr.tenantId, status: "active" },
+      { projection: { name: 1, industry: 1, branding: 1 } },
+    ),
+    locations
+      .forTenant(sys)
+      .findById(qr.locationId, { projection: { name: 1, path: 1, status: 1 } }),
+    branches.forTenant(sys).findById(qr.branchId, { projection: { name: 1, status: 1 } }),
+  ])
+  if (!tenant || !loc || loc.status !== "active" || !branch || branch.status !== "active") {
+    return null
+  }
   const cats = await listCategories(sys, tenant.industry)
   return {
     qrId: qr._id,

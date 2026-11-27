@@ -12,6 +12,7 @@ import { ApiError } from "@/lib/api/errors"
 import { getCurrentUser } from "@/server/auth/session"
 import { findPendingInvite } from "@/server/modules/members"
 import { roleLabel } from "@/server/rbac/labels"
+import { roles as rolesRepo } from "@/server/repositories"
 import { AcceptInvite } from "./accept-button"
 
 export const metadata: Metadata = { title: "Accept invite · QR Feed", robots: { index: false } }
@@ -53,7 +54,22 @@ async function InviteBody({
   token: string
   invite: Awaited<ReturnType<typeof findPendingInvite>>
 }) {
-  const user = await getCurrentUser()
+  const needsCustom = invite.roles.some((r) => r.startsWith("custom:"))
+  const [user, customRoles] = await Promise.all([
+    getCurrentUser(),
+    needsCustom
+      ? rolesRepo
+          .forTenant({
+            tenantId: tenant._id,
+            actorId: "public",
+            roles: [],
+            permissions: new Set(),
+            branchScope: "all",
+          })
+          .find({}, { projection: { name: 1 } })
+      : [],
+  ])
+  const customRoleNames = new Map(customRoles.map((r) => [r._id.toHexString(), r.name]))
   const here = `/invite/${token}`
   const linkClass = buttonVariants({ size: "xl", className: "w-full" })
 
@@ -69,7 +85,7 @@ async function InviteBody({
       <div className="mt-3 flex flex-wrap gap-1.5">
         {invite.roles.map((r) => (
           <Badge key={r} variant="muted">
-            {roleLabel(r)}
+            {roleLabel(r, customRoleNames)}
           </Badge>
         ))}
       </div>

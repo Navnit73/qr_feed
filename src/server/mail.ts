@@ -34,6 +34,7 @@ export async function sendMail(mail: Mail): Promise<{ delivered: boolean; provid
           text: mail.text,
           ...(mail.html ? { html: mail.html } : {}),
         }),
+        signal: AbortSignal.timeout(10_000),
       })
       return { delivered: res.ok, provider: "resend" }
     } catch {
@@ -41,6 +42,10 @@ export async function sendMail(mail: Mail): Promise<{ delivered: boolean; provid
     }
   }
 
+  if (process.env.NODE_ENV === "production") {
+    console.warn(`[mail] RESEND_API_KEY not configured; suppressed email to=${mail.to}`)
+    return { delivered: false, provider: "unconfigured" }
+  }
   if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     console.info(`[mail] to=${mail.to} subject="${mail.subject}"\n${mail.text}`)
   }
@@ -79,6 +84,7 @@ export async function sendSms(msg: SmsMessage): Promise<{ delivered: boolean; pr
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body,
+        signal: AbortSignal.timeout(10_000),
       })
       return { delivered: res.ok, provider: "twilio" }
     } catch {
@@ -86,6 +92,10 @@ export async function sendSms(msg: SmsMessage): Promise<{ delivered: boolean; pr
     }
   }
 
+  if (process.env.NODE_ENV === "production") {
+    console.warn(`[${msg.channel ?? "sms"}] Twilio not configured; suppressed message to=${msg.to}`)
+    return { delivered: false, provider: "unconfigured" }
+  }
   if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     console.info(`[${msg.channel ?? "sms"}] to=${msg.to} body="${msg.body}"`)
   }

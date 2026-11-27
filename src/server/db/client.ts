@@ -15,8 +15,16 @@ function state(): State {
   if (!g.__qrFeedMongo) {
     const { MONGODB_URI, MONGODB_DB } = env()
     // The driver connects lazily on the first operation, so this stays synchronous.
+    // Tuned pool sizing keeps latency low under burst traffic without exhausting Atlas sockets.
     g.__qrFeedMongo = {
-      client: new MongoClient(MONGODB_URI, { appName: "qr-feed" }),
+      client: new MongoClient(MONGODB_URI, {
+        appName: "qr-feed",
+        maxPoolSize: 50,
+        minPoolSize: 2,
+        maxIdleTimeMS: 60_000,
+        serverSelectionTimeoutMS: 5_000,
+        connectTimeoutMS: 5_000,
+      }),
       dbName: MONGODB_DB,
     }
   }

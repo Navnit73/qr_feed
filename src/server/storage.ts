@@ -9,8 +9,9 @@ import type { TenantContext } from "@/server/db/tenant-context"
 import { inBranchScope } from "@/server/db/tenant-context"
 import { env } from "@/server/env"
 import { sanitizeImage } from "@/server/image-sanitize"
-import { resolvePublicQr } from "@/server/modules/qr-codes"
-import { attachments, tickets, type AttachmentScope } from "@/server/repositories"
+import { resolvePublicQrLite } from "@/server/modules/qr-codes"
+import { can } from "@/server/rbac/ability"
+import { attachments, ticketComments, tickets, type AttachmentScope } from "@/server/repositories"
 
 const sha256Hex = (data: Buffer | string) => createHash("sha256").update(data).digest("hex")
 const hmac = (key: Buffer | string, data: string) => createHmac("sha256", key).update(data).digest()
@@ -34,10 +35,11 @@ export function getS3Config(): S3Config | null {
     const e = env()
     if (!e.STORAGE_BUCKET || !e.STORAGE_ACCESS_KEY_ID || !e.STORAGE_SECRET_ACCESS_KEY) return null
     const region = e.STORAGE_REGION || "auto"
-    const endpoint = e.STORAGE_ENDPOINT || `https://s3.${region}.amazonaws.com`
+    const awsRegion = region === "auto" ? "us-east-1" : region
+    const endpoint = e.STORAGE_ENDPOINT || `https://s3.${awsRegion}.amazonaws.com`
     return {
       endpoint: endpoint.replace(/\/+$/, ""),
-      region,
+      region: e.STORAGE_ENDPOINT ? region : awsRegion,
       bucket: e.STORAGE_BUCKET,
       accessKeyId: e.STORAGE_ACCESS_KEY_ID,
       secretAccessKey: e.STORAGE_SECRET_ACCESS_KEY,
@@ -170,6 +172,7 @@ async function putObject(key: string, body: Buffer, contentType: string) {
       method: "PUT",
       headers: req.headers,
       body: new Uint8Array(body),
+      signal: AbortSignal.timeout(15_000),
     })
     if (!res.ok) throw new ApiError("INTERNAL", "Could not store image.")
     return
@@ -183,7 +186,11 @@ async function getObject(key: string): Promise<Buffer> {
   const cfg = getS3Config()
   if (cfg) {
     const req = s3SignedHeaders(cfg, "GET", key, sha256Hex(""))
-    const res = await fetch(req.url, { method: "GET", headers: req.headers })
+    const res = await fetch(req.url, {
+      method: "GET",
+      headers: req.headers,
+      signal: AbortSignal.timeout(15_000),
+    })
     if (!res.ok) throw new ApiError("NOT_FOUND", "File not found.")
     return Buffer.from(await res.arrayBuffer())
   }
@@ -198,7 +205,11 @@ export async function deleteObject(key: string) {
   const cfg = getS3Config()
   if (cfg) {
     const req = s3SignedHeaders(cfg, "DELETE", key, sha256Hex(""))
-    await fetch(req.url, { method: "DELETE", headers: req.headers }).catch(() => {})
+    await fetch(req.url, {
+      method: "DELETE",
+      headers: req.headers,
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => {})
     return
   }
   await unlink(safeLocalPath(key)).catch(() => {})
@@ -218,7 +229,7 @@ export async function storePublicAttachment(
   shortCode: string,
   file: { filename: string; buffer: Buffer },
 ) {
-  const pub = await resolvePublicQr(shortCode)
+  const pub = await resolvePublicQrLite(shortCode)
   if (!pub) throw new ApiError("NOT_FOUND", "This QR code is no longer active.")
 
   const clean = sanitizeImage(file.buffer)
@@ -235,17 +246,23 @@ export async function storePublicAttachment(
     permissions: new Set(),
     branchScope: "all",
   }
-  const doc = await attachments.forTenant(sys).insertOne({
-    branchId: pub.branchId,
-    storageKey,
-    filename: cleanFilename(file.filename, clean.ext),
-    contentType: clean.contentType,
-    size: clean.buffer.length,
-    uploadedBy: "public",
-    scope: "ticket",
-    claimTokenHash: sha256Hex(claimToken),
-    claimed: false,
-  })
+  let doc
+  try {
+    doc = await attachments.forTenant(sys).insertOne({
+      branchId: pub.branchId,
+      storageKey,
+      filename: cleanFilename(file.filename, clean.ext),
+      contentType: clean.contentType,
+      size: clean.buffer.length,
+      uploadedBy: "public",
+      scope: "ticket",
+      claimTokenHash: sha256Hex(claimToken),
+      claimed: false,
+    })
+  } catch (err) {
+    await deleteObject(storageKey)
+    throw err
+  }
 
   return {
     attachmentId: doc._id.toHexString(),
@@ -256,12 +273,13 @@ export async function storePublicAttachment(
   }
 }
 
-/** Validates and claims pre-uploaded public attachments during ticket creation. */
+/** Validates and atomically claims pre-uploaded public attachments during ticket creation. */
 export async function claimPublicAttachments(
   sys: TenantContext,
   ids: string[],
   tokens: string[],
   ticketId: ObjectId,
+  reporterTokenHash?: string,
 ): Promise<string[]> {
   if (!ids.length) return []
   const claimed: string[] = []
@@ -272,11 +290,50 @@ export async function claimPublicAttachments(
     const token = tokens[i]
     if (!id || !token) continue
     const doc = await repo.findById(id)
-    if (!doc || doc.claimed || doc.claimTokenHash !== sha256Hex(token)) continue
-    await repo.updateOne({ _id: doc._id }, { $set: { claimed: true, entityId: ticketId } })
-    claimed.push(doc._id.toHexString())
+    if (!doc || doc.claimed) continue
+    const updated = await repo.updateOne(
+      { _id: doc._id, claimed: false, claimTokenHash: sha256Hex(token) },
+      {
+        $set: {
+          claimed: true,
+          entityId: ticketId,
+          ...(reporterTokenHash ? { reporterTokenHash } : {}),
+        },
+      },
+    )
+    if (updated) claimed.push(updated._id.toHexString())
   }
   return claimed
+}
+
+function assertCanUploadScope(ctx: TenantContext, scope: AttachmentScope, branchId?: ObjectId) {
+  const opts = branchId ? { branchId } : {}
+  const allowed =
+    scope === "ticket" || scope === "comment"
+      ? can(ctx, "ticket:work", opts) || can(ctx, "ticket:create", opts)
+      : scope === "rca" || scope === "capa"
+        ? can(ctx, "rca:manage", opts) ||
+          can(ctx, "capa:manage", opts) ||
+          can(ctx, "capa:verify", opts)
+        : can(ctx, "audit:run", opts)
+  if (!allowed) {
+    throw new ApiError("FORBIDDEN", "You don't have permission to upload attachments here.")
+  }
+}
+
+function assertCanReadScope(ctx: TenantContext, scope: AttachmentScope, branchId?: ObjectId) {
+  const opts = branchId ? { branchId } : {}
+  const allowed =
+    scope === "ticket" || scope === "comment"
+      ? can(ctx, "ticket:read", opts)
+      : scope === "rca"
+        ? can(ctx, "rca:read", opts)
+        : scope === "capa"
+          ? can(ctx, "capa:read", opts)
+          : can(ctx, "audit:read", opts)
+  if (!allowed) {
+    throw new ApiError("FORBIDDEN", "You don't have access to this attachment.")
+  }
 }
 
 export async function storeTenantAttachment(
@@ -289,47 +346,69 @@ export async function storeTenantAttachment(
     entityId?: ObjectId
   },
 ) {
-  if (input.branchId && !inBranchScope(ctx.branchScope, input.branchId)) {
+  let branchId = input.branchId
+  if (branchId && !inBranchScope(ctx.branchScope, branchId)) {
     throw new ApiError("FORBIDDEN", "You don't have access to that branch.")
   }
+  if (!branchId && ctx.branchScope !== "all") {
+    if (ctx.branchScope.length === 1) {
+      branchId = ctx.branchScope[0]
+    } else {
+      throw new ApiError("VALIDATION", "Specify a branch when uploading attachments.")
+    }
+  }
+  assertCanUploadScope(ctx, input.scope, branchId)
+
   const clean = sanitizeImage(input.buffer)
   const id = randomBytes(16).toString("hex")
   const storageKey = `${ctx.tenantId.toHexString()}/${input.scope}/${id}.${clean.ext}`
 
   await putObject(storageKey, clean.buffer, clean.contentType)
 
-  return attachments.forTenant(ctx).insertOne({
-    ...(input.branchId ? { branchId: input.branchId } : {}),
-    storageKey,
-    filename: cleanFilename(input.filename, clean.ext),
-    contentType: clean.contentType,
-    size: clean.buffer.length,
-    uploadedBy: ctx.actorId,
-    scope: input.scope,
-    ...(input.entityId ? { entityId: input.entityId } : {}),
-    claimed: true,
-  })
+  try {
+    return await attachments.forTenant(ctx).insertOne({
+      ...(branchId ? { branchId } : {}),
+      storageKey,
+      filename: cleanFilename(input.filename, clean.ext),
+      contentType: clean.contentType,
+      size: clean.buffer.length,
+      uploadedBy: ctx.actorId,
+      scope: input.scope,
+      ...(input.entityId ? { entityId: input.entityId } : {}),
+      claimed: true,
+    })
+  } catch (err) {
+    await deleteObject(storageKey)
+    throw err
+  }
 }
 
 export async function readAttachmentBytes(ctx: TenantContext, attachmentId: string) {
   const doc = await attachments.forTenant(ctx).findById(attachmentId)
   if (!doc) throw new ApiError("NOT_FOUND", "Attachment not found.")
-  if (doc.branchId && !inBranchScope(ctx.branchScope, doc.branchId)) {
-    throw new ApiError("FORBIDDEN", "You don't have access to this attachment.")
+  if (ctx.branchScope !== "all") {
+    if (doc.branchId) {
+      if (!inBranchScope(ctx.branchScope, doc.branchId)) {
+        throw new ApiError("FORBIDDEN", "You don't have access to this attachment.")
+      }
+    } else if (doc.uploadedBy !== ctx.actorId) {
+      throw new ApiError("FORBIDDEN", "You don't have access to this attachment.")
+    }
   }
+  assertCanReadScope(ctx, doc.scope, doc.branchId)
   const buffer = await getObject(doc.storageKey)
   return { buffer, contentType: doc.contentType, filename: doc.filename }
 }
 
-/** Allows a reporter with their private tracking token to view photos on their ticket. */
+/** Allows a reporter with their private tracking token to view photos on their ticket (own uploads, resolution proof, or public staff remarks). */
 export async function readPublicAttachmentBytes(attachmentId: string, trackingToken: string) {
   if (!trackingToken || trackingToken.length < 20) {
     throw new ApiError("FORBIDDEN", "Access denied.")
   }
-  const ticket = await tickets.unscoped().findOne({ trackingTokenHashes: sha256Hex(trackingToken) })
-  if (!ticket || !(ticket.attachments ?? []).includes(attachmentId)) {
-    throw new ApiError("NOT_FOUND", "Attachment not found.")
-  }
+  const tokenHash = sha256Hex(trackingToken)
+  const ticket = await tickets.unscoped().findOne({ trackingTokenHashes: tokenHash })
+  if (!ticket) throw new ApiError("NOT_FOUND", "Attachment not found.")
+
   const sys: TenantContext = {
     tenantId: ticket.tenantId,
     actorId: "public",
@@ -337,8 +416,50 @@ export async function readPublicAttachmentBytes(attachmentId: string, trackingTo
     permissions: new Set(),
     branchScope: "all",
   }
+
+  let allowed =
+    (ticket.attachments ?? []).includes(attachmentId) ||
+    (ticket.resolutionAttachments ?? []).includes(attachmentId)
+
+  if (!allowed) {
+    const pubComment = await ticketComments
+      .forTenant(sys)
+      .findOne({ ticketId: ticket._id, visibility: "public", attachments: attachmentId })
+    allowed = Boolean(pubComment)
+  }
+  if (!allowed) {
+    throw new ApiError("NOT_FOUND", "Attachment not found.")
+  }
+
   const doc = await attachments.forTenant(sys).findById(attachmentId)
   if (!doc) throw new ApiError("NOT_FOUND", "Attachment not found.")
+  // Prevent reporters merged into a duplicate ticket from seeing another stranger's private photo.
+  if (doc.reporterTokenHash && doc.reporterTokenHash !== tokenHash) {
+    throw new ApiError("NOT_FOUND", "Attachment not found.")
+  }
   const buffer = await getObject(doc.storageKey)
   return { buffer, contentType: doc.contentType, filename: doc.filename }
+}
+
+/** Deletes unclaimed public uploads older than `olderThanHours` (prevents abandoned upload storage leaks). */
+export async function sweepOrphanAttachments(
+  now = new Date(),
+  olderThanHours = 24,
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - olderThanHours * 3_600_000)
+  const orphans = await attachments
+    .unscoped()
+    .find(
+      { claimed: false, createdAt: { $lte: cutoff } },
+      { projection: { _id: 1, storageKey: 1 }, limit: 200 },
+    )
+    .toArray()
+  if (orphans.length === 0) return 0
+  await Promise.all(
+    orphans.map(async (doc) => {
+      await deleteObject(doc.storageKey)
+      await attachments.unscoped().deleteOne({ _id: doc._id, claimed: false })
+    }),
+  )
+  return orphans.length
 }

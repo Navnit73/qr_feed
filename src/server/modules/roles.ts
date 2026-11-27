@@ -21,6 +21,15 @@ const roleSchema = z.object({
     .refine((list) => list.every(isPermission), "Unknown permission selected"),
 })
 
+const TENANT_ONLY_PERMISSIONS = new Set<Permission>([
+  "tenant:manage",
+  "billing:manage",
+  "branch:manage",
+  "role:manage",
+  "settings:manage",
+  "settings:sla",
+])
+
 function assertCanGrantPermissions(
   ctx: TenantContext,
   scope: "tenant" | "branch",
@@ -28,6 +37,18 @@ function assertCanGrantPermissions(
 ) {
   if (scope === "tenant" && ctx.branchScope !== "all") {
     throw new ApiError("FORBIDDEN", "Only organisation-wide admins can create tenant-scoped roles.")
+  }
+  if (scope === "branch") {
+    const disallowed = perms.filter((p) => TENANT_ONLY_PERMISSIONS.has(p as Permission))
+    if (disallowed.length > 0) {
+      throw new ApiError(
+        "VALIDATION",
+        `Tenant-wide permissions (${disallowed.join(", ")}) require a tenant-scoped role.`,
+        {
+          permissions: ["Use tenant scope for organisation-level settings and billing permissions"],
+        },
+      )
+    }
   }
   for (const p of perms) {
     if (!ctx.permissions.has(p as Permission)) {
@@ -136,29 +157,32 @@ export async function updateCustomRole(
 export async function deleteCustomRole(ctx: TenantContext, idRaw: ObjectId | string) {
   assertCan(ctx, "role:manage")
   const id = parseInput(objectId, idRaw)
-  const existing = await roles.forTenant(ctx).findById(id)
-  if (!existing) throw new ApiError("NOT_FOUND", "Role not found.")
-  assertCanGrantPermissions(ctx, existing.scope, existing.permissions)
-
   const key = `custom:${id.toHexString()}`
-  const [inMembers, inInvites] = await Promise.all([
-    members.forTenant(ctx).count({ roles: key }),
-    invites.forTenant(ctx).count({ roles: key, status: "pending", expiresAt: { $gt: new Date() } }),
-  ])
-  if (inMembers > 0) {
-    throw new ApiError(
-      "CONFLICT",
-      "This role is still assigned to members. Change their roles first.",
-    )
-  }
-  if (inInvites > 0) {
-    throw new ApiError(
-      "CONFLICT",
-      "A pending invite still uses this role. Revoke the invite first.",
-    )
-  }
 
   await withTransaction(async (session) => {
+    const existing = await roles.forTenant(ctx).findById(id, { session })
+    if (!existing) throw new ApiError("NOT_FOUND", "Role not found.")
+    assertCanGrantPermissions(ctx, existing.scope, existing.permissions)
+
+    const [inMembers, inInvites] = await Promise.all([
+      members.forTenant(ctx).count({ roles: key }, { session }),
+      invites
+        .forTenant(ctx)
+        .count({ roles: key, status: "pending", expiresAt: { $gt: new Date() } }, { session }),
+    ])
+    if (inMembers > 0) {
+      throw new ApiError(
+        "CONFLICT",
+        "This role is still assigned to members. Change their roles first.",
+      )
+    }
+    if (inInvites > 0) {
+      throw new ApiError(
+        "CONFLICT",
+        "A pending invite still uses this role. Revoke the invite first.",
+      )
+    }
+
     await roles.forTenant(ctx).deleteOne({ _id: id }, { session })
     await appendAudit(
       ctx,

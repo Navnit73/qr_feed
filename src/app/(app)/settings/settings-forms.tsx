@@ -23,9 +23,11 @@ type Opt = { value: string; label: string }
 export function CreateSlaPolicyDialog({
   branches,
   categories,
+  customRoles = [],
 }: {
   branches: Opt[]
   categories: Opt[]
+  customRoles?: Opt[]
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -42,7 +44,12 @@ export function CreateSlaPolicyDialog({
       }
     >
       {open && (
-        <SlaPolicyForm branches={branches} categories={categories} onDone={() => setOpen(false)} />
+        <SlaPolicyForm
+          branches={branches}
+          categories={categories}
+          customRoles={customRoles}
+          onDone={() => setOpen(false)}
+        />
       )}
     </Modal>
   )
@@ -51,10 +58,12 @@ export function CreateSlaPolicyDialog({
 function SlaPolicyForm({
   branches,
   categories,
+  customRoles,
   onDone,
 }: {
   branches: Opt[]
   categories: Opt[]
+  customRoles: Opt[]
   onDone: () => void
 }) {
   const [state, action] = useActionState(createSlaPolicyAction, null)
@@ -69,6 +78,7 @@ function SlaPolicyForm({
     { value: "dept_manager", label: "Department manager" },
     { value: "branch_admin", label: "Branch admin" },
     { value: "org_admin", label: "Org admin" },
+    ...customRoles,
   ]
   const actionOpts = [
     { value: "both", label: "Notify + transfer" },
@@ -218,7 +228,7 @@ export function DeleteSlaPolicyButton({ id, name }: { id: string; name: string }
 
 export function RunSweepButton() {
   const [pending, startTransition] = useTransition()
-  const [summary, setSummary] = useState<string | null>(null)
+  const [summary, setSummary] = useState<{ text: string; isError: boolean } | null>(null)
   return (
     <div className="flex items-center gap-2">
       <Button
@@ -229,28 +239,37 @@ export function RunSweepButton() {
           startTransition(async () => {
             const res = await runSlaSweepNowAction()
             if (res && res.ok) {
-              setSummary(
-                `Checked ${res.data.checked} · ${res.data.warned} warned · ${res.data.escalated} escalated`,
-              )
+              setSummary({
+                text: `Checked ${res.data.checked} · ${res.data.warned} warned · ${res.data.escalated} escalated`,
+                isError: false,
+              })
             } else if (res) {
-              setSummary(res.error.message)
+              setSummary({ text: res.error.message, isError: true })
             }
           })
         }
       >
         <Icon name="sla" data-icon="inline-start" /> Run SLA check now
       </Button>
-      {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
+      {summary && (
+        <span
+          className={summary.isError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
+        >
+          {summary.text}
+        </span>
+      )}
     </div>
   )
 }
 
 export function CreateAssignmentRuleDialog({
   branches,
+  locations = [],
   categories,
   members,
 }: {
   branches: Opt[]
+  locations?: Opt[]
   categories: Opt[]
   members: Opt[]
 }) {
@@ -271,6 +290,7 @@ export function CreateAssignmentRuleDialog({
       {open && (
         <AssignmentRuleForm
           branches={branches}
+          locations={locations}
           categories={categories}
           members={members}
           onDone={() => setOpen(false)}
@@ -282,11 +302,13 @@ export function CreateAssignmentRuleDialog({
 
 function AssignmentRuleForm({
   branches,
+  locations,
   categories,
   members,
   onDone,
 }: {
   branches: Opt[]
+  locations: Opt[]
   categories: Opt[]
   members: Opt[]
   onDone: () => void
@@ -316,11 +338,17 @@ function AssignmentRuleForm({
           state={state}
         />
       </div>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <FormSelect
           label="Branch"
           name="branchId"
           options={[{ value: "", label: "Any branch" }, ...branches]}
+          state={state}
+        />
+        <FormSelect
+          label="Location / subtree (optional)"
+          name="locationId"
+          options={[{ value: "", label: "Any location" }, ...locations]}
           state={state}
         />
         <FormSelect
@@ -367,13 +395,21 @@ function AssignmentRuleForm({
 
 export function AssignmentRuleActions({ id, active }: { id: string; active: boolean }) {
   const [pending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+  const swal = useSweetAlert()
   return (
-    <div className="flex gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       <Button
         variant="ghost"
         size="sm"
         loading={pending}
-        onClick={() => startTransition(() => void toggleAssignmentRuleAction(id, !active))}
+        onClick={() => {
+          setError(null)
+          startTransition(async () => {
+            const res = await toggleAssignmentRuleAction(id, !active)
+            if (res && !res.ok) setError(res.error.message)
+          })
+        }}
       >
         {active ? "Pause" : "Enable"}
       </Button>
@@ -381,10 +417,24 @@ export function AssignmentRuleActions({ id, active }: { id: string; active: bool
         variant="ghost"
         size="sm"
         loading={pending}
-        onClick={() => startTransition(() => void deleteAssignmentRuleAction(id))}
+        onClick={() =>
+          swal.fire({
+            tone: "warning",
+            title: "Delete assignment rule?",
+            text: "New tickets will fall through to remaining rules or the unassigned queue.",
+            confirmText: "Delete",
+            cancelText: "Keep it",
+            confirmVariant: "destructive",
+            onConfirm: async () => {
+              const res = await deleteAssignmentRuleAction(id)
+              if (res && !res.ok) throw new Error(res.error.message)
+            },
+          })
+        }
       >
         Delete
       </Button>
+      {error && <span className="text-xs text-destructive">{error}</span>}
     </div>
   )
 }

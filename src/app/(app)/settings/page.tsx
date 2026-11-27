@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
+import { redirect } from "next/navigation"
 import { PanelCard } from "@/components/cards/panel-card"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
@@ -11,9 +12,11 @@ import { listAssignmentRules } from "@/server/modules/assignment"
 import { listBranches } from "@/server/modules/branches"
 import { listAllCategories } from "@/server/modules/categories"
 import { listMembers } from "@/server/modules/members"
+import { listCustomRoles } from "@/server/modules/roles"
 import { listEscalationEvents, listSlaPolicies } from "@/server/modules/sla"
 import { getTenant } from "@/server/modules/tenants"
 import { can } from "@/server/rbac/ability"
+import { locations as locationsRepo } from "@/server/repositories"
 import {
   AssignmentRuleActions,
   AutomationSettingsForm,
@@ -35,18 +38,101 @@ const fmt = new Intl.DateTimeFormat("en-GB", {
 
 export default async function SettingsPage({ searchParams }: PageProps<"/settings">) {
   const ctx = await requireTenantContext()
+  const canManageSla = can(ctx, "settings:sla")
+  const canManageSettings = can(ctx, "settings:manage")
+  const canManageTenant = can(ctx, "tenant:manage")
+  const canBill = can(ctx, "billing:manage") || canManageTenant
+  if (!canManageSla && !canManageSettings && !canManageTenant && !canBill) {
+    redirect("/dashboard")
+  }
+
+  const tabs = [
+    ...(canManageSla || canManageSettings || canManageTenant
+      ? [{ key: "sla", label: "SLA & Escalation", href: "/settings?tab=sla", inline: true }]
+      : []),
+    ...(canManageSettings || can(ctx, "ticket:assign")
+      ? [
+          {
+            key: "assignment",
+            label: "Assignment rules",
+            href: "/settings?tab=assignment",
+            inline: true,
+          },
+        ]
+      : []),
+    ...(canManageSettings || canManageTenant
+      ? [
+          {
+            key: "categories",
+            label: "Categories",
+            href: "/settings?tab=categories",
+            inline: true,
+          },
+          {
+            key: "automation",
+            label: "Automation",
+            href: "/settings?tab=automation",
+            inline: true,
+          },
+        ]
+      : []),
+    {
+      key: "notifications",
+      label: "Notifications",
+      href: "/settings/notifications",
+      inline: false,
+    },
+    ...(canManageTenant
+      ? [{ key: "branding", label: "Branding", href: "/settings/branding", inline: false }]
+      : []),
+    ...(canBill
+      ? [{ key: "billing", label: "Billing & Plan", href: "/settings/billing", inline: false }]
+      : []),
+    ...(canManageSettings
+      ? [
+          {
+            key: "integrations",
+            label: "API & Webhooks",
+            href: "/settings/integrations",
+            inline: false,
+          },
+        ]
+      : []),
+    ...(canManageTenant
+      ? [{ key: "privacy", label: "Data & Privacy", href: "/settings/privacy", inline: false }]
+      : []),
+  ]
+
+  const inlineKeys = tabs.filter((t) => t.inline).map((t) => t.key)
+  if (inlineKeys.length === 0) {
+    redirect(canBill ? "/settings/billing" : "/settings/notifications")
+  }
+
   const sp = await searchParams
-  const tab = typeof sp.tab === "string" ? sp.tab : "sla"
+  const requestedTab = typeof sp.tab === "string" ? sp.tab : inlineKeys[0]
+  const tab = inlineKeys.includes(requestedTab) ? requestedTab : inlineKeys[0]
 
   const tenant = await getTenant(ctx.tenantId)
-  const [policies, escalations, rules, categories, branches, members] = await Promise.all([
-    can(ctx, "ticket:read") ? listSlaPolicies(ctx) : [],
-    can(ctx, "ticket:read") ? listEscalationEvents(ctx) : [],
-    can(ctx, "ticket:assign") ? listAssignmentRules(ctx) : [],
-    listAllCategories(ctx, tenant?.industry ?? "other"),
-    can(ctx, "branch:read") ? listBranches(ctx) : [],
-    can(ctx, "user:read") ? listMembers(ctx) : [],
-  ])
+  // Load only the collections required by the active tab for fast Settings switching.
+  const [policies, escalations, rules, categories, branches, members, customRoles, locationDocs] =
+    await Promise.all([
+      tab === "sla" && (can(ctx, "ticket:read") || canManageSla) ? listSlaPolicies(ctx) : [],
+      tab === "sla" && can(ctx, "ticket:read") ? listEscalationEvents(ctx) : [],
+      tab === "assignment" && (can(ctx, "ticket:assign") || canManageSettings)
+        ? listAssignmentRules(ctx)
+        : [],
+      tab === "sla" || tab === "assignment" || tab === "categories"
+        ? listAllCategories(ctx, tenant?.industry ?? "other")
+        : [],
+      (tab === "sla" || tab === "assignment") && can(ctx, "branch:read") ? listBranches(ctx) : [],
+      tab === "assignment" && can(ctx, "user:read") ? listMembers(ctx) : [],
+      tab === "sla" && canManageSla ? listCustomRoles(ctx) : [],
+      tab === "assignment" && can(ctx, "location:read")
+        ? locationsRepo
+            .forTenant(ctx)
+            .find({ status: "active" }, { sort: { path: 1 }, limit: 200, projection: { path: 1 } })
+        : [],
+    ])
 
   const branchOpts = branches.map((b) => ({ value: b._id.toHexString(), label: b.name }))
   const categoryOpts = categories.map((c) => ({ value: c._id.toHexString(), label: c.label }))
@@ -54,20 +140,14 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
     .filter((m) => m.status === "active")
     .map((m) => ({ value: m.userId, label: m.name }))
   const memberName = new Map(members.map((m) => [m.userId, m.name]))
-  const canManageSla = can(ctx, "settings:sla")
-  const canManageSettings = can(ctx, "settings:manage")
-
-  const tabs = [
-    { key: "sla", label: "SLA & Escalation", href: "/settings?tab=sla" },
-    { key: "assignment", label: "Assignment rules", href: "/settings?tab=assignment" },
-    { key: "categories", label: "Categories", href: "/settings?tab=categories" },
-    { key: "automation", label: "Automation", href: "/settings?tab=automation" },
-    { key: "notifications", label: "Notifications", href: "/settings/notifications" },
-    { key: "branding", label: "Branding", href: "/settings/branding" },
-    { key: "billing", label: "Billing & Plan", href: "/settings/billing" },
-    { key: "integrations", label: "API & Webhooks", href: "/settings/integrations" },
-    { key: "privacy", label: "Data & Privacy", href: "/settings/privacy" },
-  ]
+  const customRoleOpts = customRoles.map((r) => ({
+    value: `custom:${r._id.toHexString()}`,
+    label: `${r.name} (custom)`,
+  }))
+  const locationOpts = locationDocs.map((l) => ({
+    value: l._id.toHexString(),
+    label: l.path.join(" › "),
+  }))
 
   return (
     <>
@@ -106,7 +186,11 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
               canManageSla && (
                 <div className="flex flex-wrap items-center gap-2">
                   <RunSweepButton />
-                  <CreateSlaPolicyDialog branches={branchOpts} categories={categoryOpts} />
+                  <CreateSlaPolicyDialog
+                    branches={branchOpts}
+                    categories={categoryOpts}
+                    customRoles={customRoleOpts}
+                  />
                 </div>
               )
             }
@@ -208,6 +292,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
             canManageSettings && (
               <CreateAssignmentRuleDialog
                 branches={branchOpts}
+                locations={locationOpts}
                 categories={categoryOpts}
                 members={memberOpts}
               />
@@ -299,7 +384,7 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         >
           {canManageSettings ? (
             <AutomationSettingsForm
-              autoCloseDays={tenant?.settings?.autoCloseDays ?? 7}
+              autoCloseDays={tenant?.settings?.autoCloseDays ?? 0}
               repeatRcaThreshold={tenant?.settings?.repeatRcaThreshold ?? 3}
             />
           ) : (

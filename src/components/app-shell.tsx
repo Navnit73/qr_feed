@@ -1,16 +1,18 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react"
-import { AppNav, isActivePath, type NavItem } from "@/components/app-nav"
+import { AppNav, type NavItem } from "@/components/app-nav"
 import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -47,7 +49,13 @@ export type ShellData = {
     createdAt: string
   }[]
   usage: { label: string; used: number; limit: number }[]
-  user: { name: string; email: string; roleLabel: string; isSuperAdmin: boolean }
+  user: {
+    name: string
+    email: string
+    roleLabel: string
+    isSuperAdmin: boolean
+    canSettings: boolean
+  }
 }
 
 const SidebarContext = createContext<{ collapsed: boolean; toggle: () => void }>({
@@ -75,13 +83,21 @@ function readSidebarCollapsed() {
 export function AppShellFrame({
   sidebar,
   header,
+  banner,
   children,
 }: {
   sidebar: ReactNode
   header: ReactNode
+  banner?: ReactNode
   children: ReactNode
 }) {
   const collapsed = useSyncExternalStore(subscribeSidebar, readSidebarCollapsed, () => false)
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {})
+    }
+  }, [])
 
   function toggle() {
     const next = !readSidebarCollapsed()
@@ -110,6 +126,7 @@ export function AppShellFrame({
           {sidebar}
         </aside>
         {header}
+        {banner}
         <main className="mx-auto w-full max-w-[88rem] px-4 pt-6 pb-16 sm:px-6 lg:px-8 lg:pt-8">
           {children}
         </main>
@@ -204,9 +221,15 @@ export function SidebarBody({
         <div className="m-3 rounded-xl bg-sidebar-accent p-3">
           <p className="mb-2.5 flex items-center justify-between text-xs font-semibold">
             <span className="capitalize">{data.plan} usage</span>
-            <Link href="/settings" className="font-medium underline-offset-2 hover:underline">
-              Manage
-            </Link>
+            {data.user.canSettings && (
+              <Link
+                href="/settings/billing"
+                onClick={onNavigate}
+                className="font-medium underline-offset-2 hover:underline"
+              >
+                Manage
+              </Link>
+            )}
           </p>
           <ul className="space-y-2.5">
             {data.usage.map((u) => {
@@ -258,7 +281,7 @@ export function MobileNav({ data }: { data: ShellData }) {
       </SheetTrigger>
       <SheetContent
         side="left"
-        className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground sm:max-w-72"
+        className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground sm:max-w-72 [&>[data-slot=sheet-close]]:text-sidebar-foreground [&>[data-slot=sheet-close]]:hover:bg-sidebar-accent [&>[data-slot=sheet-close]]:hover:text-sidebar-foreground"
       >
         <SheetTitle className="sr-only">Menu</SheetTitle>
         <SidebarBody data={data} forceExpanded onNavigate={() => setOpen(false)} />
@@ -272,19 +295,6 @@ function MenuGlyph() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <path d="M4 7h16M4 12h16M4 17h10" strokeLinecap="round" />
     </svg>
-  )
-}
-
-/** The current section's name in the header, from the same list the sidebar uses. */
-export function HeaderTitle({ nav }: { nav: NavItem[] }) {
-  const pathname = usePathname()
-  const item = nav.find((i) => isActivePath(pathname, i.href))
-  if (!item) return null
-  return (
-    <p className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-      <Icon name={item.icon} className="hidden text-muted-foreground sm:block" />
-      <span className="truncate">{item.label}</span>
-    </p>
   )
 }
 
@@ -361,18 +371,25 @@ export function CommandSearch({ nav }: { nav: NavItem[] }) {
     const q = query.trim()
     if (q.length < 2) return
     let cancelled = false
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
       setLoading(true)
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+          signal: controller.signal,
+        })
+        if (!res.ok) return
         const json = await res.json().catch(() => null)
         if (!cancelled && json?.ok) setResults(json.data)
+      } catch {
+        // Ignore aborted/offline searches
       } finally {
         if (!cancelled) setLoading(false)
       }
     }, 180)
     return () => {
       cancelled = true
+      controller.abort()
       clearTimeout(timer)
     }
   }, [open, query])
@@ -381,6 +398,7 @@ export function CommandSearch({ nav }: { nav: NavItem[] }) {
     setOpen(next)
     if (!next) {
       setQuery("")
+      setLoading(false)
       setResults({ tickets: [], locations: [] })
     }
   }
@@ -422,7 +440,11 @@ export function CommandSearch({ nav }: { nav: NavItem[] }) {
         <Input
           autoFocus
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value
+            setQuery(next)
+            if (next.trim().length < 2) setLoading(false)
+          }}
           placeholder="Search tickets (TKT-…), locations or pages…"
           className="h-11"
         />
@@ -497,14 +519,25 @@ export function CommandSearch({ nav }: { nav: NavItem[] }) {
             </div>
           )}
 
-          {loading && <p className="text-xs text-muted-foreground">Searching…</p>}
+          {loading && qLower.length >= 2 && (
+            <p className="text-xs text-muted-foreground">Searching…</p>
+          )}
+          {!loading &&
+            qLower.length >= 2 &&
+            matchingPages.length === 0 &&
+            visibleResults.tickets.length === 0 &&
+            visibleResults.locations.length === 0 && (
+              <p className="py-4 text-center text-xs text-muted-foreground">
+                No matches found for &ldquo;{query.trim()}&rdquo;.
+              </p>
+            )}
         </div>
       </div>
     </Modal>
   )
 }
 
-/** Notification bell in the sticky top bar. */
+/** Notification bell in the sticky top bar, kept live via SSE. */
 export function NotificationBell({
   unread,
   items,
@@ -513,29 +546,124 @@ export function NotificationBell({
   items: ShellData["recentNotifications"]
 }) {
   const router = useRouter()
-  const [unreadCount, setUnreadCount] = useState(unread)
+  const [live, setLive] = useState<{
+    baseUnread: number
+    baseItems: ShellData["recentNotifications"]
+    unread: number
+    items: ShellData["recentNotifications"]
+  } | null>(null)
+  const activeLive = live && live.baseUnread === unread && live.baseItems === items ? live : null
+  const liveUnread = activeLive ? activeLive.unread : unread
+  const liveItems = activeLive ? activeLive.items : items
+  const prevUnreadRef = useRef(liveUnread)
+
+  useEffect(() => {
+    prevUnreadRef.current = liveUnread
+  }, [liveUnread])
+
+  const fetchLatest = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications", { cache: "no-store" })
+      if (!res.ok) return
+      const json = await res.json().catch(() => null)
+      if (json?.ok) {
+        prevUnreadRef.current = json.data.unread
+        setLive({
+          baseUnread: unread,
+          baseItems: items,
+          unread: json.data.unread,
+          items: json.data.items,
+        })
+      }
+    } catch {
+      // Ignore transient offline polls
+    }
+  }, [unread, items])
+
+  useEffect(() => {
+    if (typeof EventSource === "undefined") return
+    const es = new EventSource("/api/notifications/stream")
+    es.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data) as { unread?: number }
+        if (typeof parsed.unread === "number") {
+          const nextUnread = parsed.unread
+          const increased = nextUnread > prevUnreadRef.current
+          prevUnreadRef.current = nextUnread
+          setLive((cur) => ({
+            baseUnread: unread,
+            baseItems: items,
+            unread: nextUnread,
+            items: cur && cur.baseUnread === unread && cur.baseItems === items ? cur.items : items,
+          }))
+          if (increased) void fetchLatest()
+        }
+      } catch {
+        // Ignore malformed frame
+      }
+    }
+    return () => {
+      es.close()
+    }
+  }, [fetchLatest, unread, items])
 
   async function markAllRead() {
-    setUnreadCount(0)
-    await fetch("/api/notifications", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ markAllRead: true }),
-    }).catch(() => {})
-    router.refresh()
+    const prev = activeLive
+    setLive({
+      baseUnread: unread,
+      baseItems: items,
+      unread: 0,
+      items: liveItems.map((n) => ({ ...n, read: true })),
+    })
+    try {
+      const res = await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markAllRead: true }),
+      })
+      if (!res.ok) {
+        setLive(prev)
+        return
+      }
+      router.refresh()
+    } catch {
+      setLive(prev)
+    }
+  }
+
+  function openNotification(n: ShellData["recentNotifications"][number]) {
+    if (!n.read) {
+      setLive({
+        baseUnread: unread,
+        baseItems: items,
+        unread: Math.max(0, liveUnread - 1),
+        items: liveItems.map((item) => (item.id === n.id ? { ...item, read: true } : item)),
+      })
+      void fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: n.id }),
+        keepalive: true,
+      }).catch(() => {})
+    }
+    router.push(n.href || "/notifications")
   }
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) void fetchLatest()
+      }}
+    >
       <DropdownMenuTrigger
         render={
           <Button variant="ghost" size="icon-xl" aria-label="Notifications" className="relative" />
         }
       >
         <Icon name="notification" className="size-5" />
-        {unreadCount > 0 && (
+        {liveUnread > 0 && (
           <span className="absolute top-2 right-2 grid min-w-4 place-items-center rounded-full bg-warning px-1 text-[10px] font-bold text-warning-foreground tabular-nums">
-            {unreadCount > 9 ? "9+" : unreadCount}
+            {liveUnread > 9 ? "9+" : liveUnread}
           </span>
         )}
       </DropdownMenuTrigger>
@@ -543,7 +671,7 @@ export function NotificationBell({
         <DropdownMenuGroup>
           <div className="flex items-center justify-between px-2 py-1.5">
             <span className="text-xs font-semibold text-foreground">Notifications</span>
-            {unreadCount > 0 && (
+            {liveUnread > 0 && (
               <button
                 type="button"
                 onClick={markAllRead}
@@ -554,16 +682,16 @@ export function NotificationBell({
             )}
           </div>
           <DropdownMenuSeparator />
-          {items.length === 0 ? (
+          {liveItems.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               You&apos;re all caught up.
             </p>
           ) : (
-            items.slice(0, 5).map((n) => (
+            liveItems.slice(0, 5).map((n) => (
               <DropdownMenuItem
                 key={n.id}
                 className="flex flex-col items-start gap-0.5 px-2 py-2"
-                onClick={() => router.push(n.href || "/notifications")}
+                onClick={() => openNotification(n)}
               >
                 <span className="flex w-full items-center gap-1.5 text-sm font-medium">
                   {!n.read && <span className="size-2 shrink-0 rounded-full bg-primary" />}
@@ -597,9 +725,14 @@ export function UserMenu({ user }: { user: ShellData["user"] }) {
 
   async function signOut() {
     setPending(true)
-    await authClient.signOut()
-    router.push("/sign-in")
-    router.refresh()
+    try {
+      await fetch("/api/auth/clear-session-cookies", { method: "POST" }).catch(() => {})
+      await authClient.signOut().catch(() => {})
+      router.push("/sign-in")
+      router.refresh()
+    } finally {
+      setPending(false)
+    }
   }
 
   return (
@@ -636,11 +769,19 @@ export function UserMenu({ user }: { user: ShellData["user"] }) {
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="min-h-10 px-2" onClick={() => router.push("/settings")}>
-          <Icon name="settings" /> Workspace settings
-        </DropdownMenuItem>
+        {user.canSettings && (
+          <DropdownMenuItem className="min-h-10 px-2" onClick={() => router.push("/settings")}>
+            <Icon name="settings" /> Workspace settings
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem className="min-h-10 px-2" onClick={() => router.push("/notifications")}>
           <Icon name="notification" /> Notifications
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="min-h-10 px-2"
+          onClick={() => router.push("/settings/notifications")}
+        >
+          <Icon name="settings" /> Notification preferences
         </DropdownMenuItem>
         {user.isSuperAdmin && (
           <DropdownMenuItem className="min-h-10 px-2" onClick={() => router.push("/super")}>

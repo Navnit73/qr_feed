@@ -23,7 +23,8 @@ async function worker() {
     if (i >= total) return
     const t0 = Date.now()
     try {
-      const res = await fetch(url)
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      await res.arrayBuffer()
       latencies.push(Date.now() - t0)
       if (res.ok) okCount++
       else failCount++
@@ -35,8 +36,11 @@ async function worker() {
 
 await Promise.all(Array.from({ length: concurrency }, () => worker()))
 latencies.sort((a, b) => a - b)
-const p95 = latencies[Math.floor(latencies.length * 0.95)] ?? 0
+const p95 =
+  latencies.length > 0
+    ? `${latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))]}ms`
+    : "N/A"
 const elapsedSec = Math.max(0.001, (Date.now() - started) / 1000)
 console.info(
-  `Load test complete: ${okCount} ok, ${failCount} failed, ${(total / elapsedSec).toFixed(1)} req/s, p95=${p95}ms`,
+  `Load test complete: ${okCount} ok, ${failCount} failed, ${(total / elapsedSec).toFixed(1)} req/s, p95=${p95}`,
 )

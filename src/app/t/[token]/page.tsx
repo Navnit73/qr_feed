@@ -7,7 +7,15 @@ import { CopyButton } from "@/components/copy-button"
 import { Icon } from "@/components/icons"
 import { Skeleton } from "@/components/skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { detectLocale, getGuestStrings, isRtlLocale, SUPPORTED_LOCALES } from "@/lib/i18n"
+import { Badge } from "@/components/ui/badge"
+import {
+  detectLocale,
+  getGuestStrings,
+  isRtlLocale,
+  SUPPORTED_LOCALES,
+  translateCategoryLabel,
+} from "@/lib/i18n"
+import { statusLabel } from "@/lib/ticket-display"
 import { cn } from "@/lib/utils"
 import { getPublicTicket } from "@/server/modules/intake"
 import { ClosureFeedbackForm } from "./closure-feedback-form"
@@ -65,7 +73,11 @@ async function Tracking({ params, searchParams }: PageProps<"/t/[token]">) {
   const steps = [t.stepReceived, t.stepInProgress, t.stepVerifying, t.stepResolved] as const
   const current = STEP_OF[ticket.status] ?? 0
   const brandStyle = ticket.branding?.primaryColor
-    ? ({ "--primary": ticket.branding.primaryColor } as CSSProperties)
+    ? ({
+        "--primary": ticket.branding.primaryColor,
+        "--primary-hover": ticket.branding.primaryColor,
+        "--ring": ticket.branding.primaryColor,
+      } as CSSProperties)
     : undefined
 
   return (
@@ -110,21 +122,39 @@ async function Tracking({ params, searchParams }: PageProps<"/t/[token]">) {
       )}
 
       <section aria-labelledby="ticket-heading" className="rounded-2xl border bg-card p-5">
-        <p className="text-sm text-muted-foreground">
-          {query.new || query.dup ? t.yourTicket : ticket.tenantName}
-        </p>
-        <h2
-          id="ticket-heading"
-          className="mt-0.5 font-mono text-xl font-semibold"
-          data-testid="ticket-number"
-        >
-          {ticket.number}
-        </h2>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-sm text-muted-foreground">
+              {query.new || query.dup ? t.yourTicket : ticket.tenantName}
+            </p>
+            <h2
+              id="ticket-heading"
+              className="mt-0.5 font-mono text-xl font-semibold"
+              data-testid="ticket-number"
+            >
+              {ticket.number}
+            </h2>
+          </div>
+          <Badge
+            variant={
+              ticket.status === "closed"
+                ? "success"
+                : ticket.status === "cancelled"
+                  ? "muted"
+                  : ticket.status === "pending_verification"
+                    ? "info"
+                    : "secondary"
+            }
+            className="capitalize"
+          >
+            {statusLabel(ticket.status)}
+          </Badge>
+        </div>
         <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
           <dt className="text-muted-foreground">{t.where}</dt>
           <dd>{ticket.locationPath.join(" › ")}</dd>
           <dt className="text-muted-foreground">{t.about}</dt>
-          <dd>{ticket.categoryName}</dd>
+          <dd>{translateCategoryLabel(locale, ticket.categoryKey ?? "", ticket.categoryName)}</dd>
           <dt className="text-muted-foreground">{t.reported}</dt>
           <dd className="tabular-nums">{when.format(new Date(ticket.createdAt))} UTC</dd>
           {ticket.reportCount > 1 && (
@@ -137,34 +167,42 @@ async function Tracking({ params, searchParams }: PageProps<"/t/[token]">) {
           )}
         </dl>
 
-        <ol aria-label={t.progressLabel} className="mt-6 space-y-3">
-          {steps.map((step, i) => (
-            <li
-              key={step}
-              aria-current={i === current ? "step" : undefined}
-              className="flex items-center gap-3 text-sm"
-            >
-              <span
-                className={cn(
-                  "grid size-7 shrink-0 place-items-center rounded-full border text-xs font-semibold",
-                  i < current && "border-success bg-success text-success-foreground",
-                  i === current && "border-primary bg-primary/10 text-primary",
-                  i > current && "text-muted-foreground",
-                )}
+        {ticket.status === "cancelled" ? (
+          <Alert variant="info" className="mt-6">
+            <Icon name="info" />
+            <AlertTitle>{t.cancelledTitle}</AlertTitle>
+            <AlertDescription>{t.cancelledBody}</AlertDescription>
+          </Alert>
+        ) : (
+          <ol aria-label={t.progressLabel} className="mt-6 space-y-3">
+            {steps.map((step, i) => (
+              <li
+                key={step}
+                aria-current={i === current ? "step" : undefined}
+                className="flex items-center gap-3 text-sm"
               >
-                {i < current ? <Icon name="success" className="size-4" /> : i + 1}
-              </span>
-              <span
-                className={cn(
-                  i > current && "text-muted-foreground",
-                  i === current && "font-semibold",
-                )}
-              >
-                {step}
-              </span>
-            </li>
-          ))}
-        </ol>
+                <span
+                  className={cn(
+                    "grid size-7 shrink-0 place-items-center rounded-full border text-xs font-semibold",
+                    i < current && "border-success bg-success text-success-foreground",
+                    i === current && "border-primary bg-primary/10 text-primary",
+                    i > current && "text-muted-foreground",
+                  )}
+                >
+                  {i < current ? <Icon name="success" className="size-4" /> : i + 1}
+                </span>
+                <span
+                  className={cn(
+                    i > current && "text-muted-foreground",
+                    i === current && "font-semibold",
+                  )}
+                >
+                  {step}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
 
         {ticket.publicComments.length > 0 && (
           <div className="mt-6 border-t pt-4">
@@ -222,7 +260,7 @@ async function Tracking({ params, searchParams }: PageProps<"/t/[token]">) {
 
       <p className="mt-6 text-center text-sm text-pretty text-muted-foreground">{t.bookmarkHint}</p>
       <div className="mt-3 flex justify-center">
-        <CopyButton label={t.copyTrackingLink} />
+        <CopyButton label={t.copyTrackingLink} copiedLabel={t.copied} />
       </div>
     </div>
   )

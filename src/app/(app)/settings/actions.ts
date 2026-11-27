@@ -1,6 +1,8 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
+import { z } from "zod"
+import { parseInput } from "@/lib/api/validation"
 import { formObject, runAction, type ActionState } from "@/server/actions"
 import { requireTenantContext } from "@/server/auth/session"
 import {
@@ -13,10 +15,23 @@ import { createSlaPolicy, deleteSlaPolicy, sweepSlaEscalations } from "@/server/
 import { updateTenantSettings } from "@/server/modules/tenants"
 import { assertCan } from "@/server/rbac/ability"
 
+function parseNum(value: unknown, fallback: number): number {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback
+  return Number(value)
+}
+
+const automationSchema = z.object({
+  autoCloseDays: z.coerce.number().int().min(0).max(90),
+  repeatRcaThreshold: z.coerce.number().int().min(2).max(20),
+})
+
 export async function createSlaPolicyAction(_: ActionState, form: FormData): Promise<ActionState> {
   const ctx = await requireTenantContext()
   return runAction(async () => {
     const raw = formObject(form)
+    const l1Resolve = parseNum(raw.l1Resolve, 180)
+    const l2Resolve = parseNum(raw.l2Resolve, 300)
+    const l3Resolve = parseNum(raw.l3Resolve, 480)
     await createSlaPolicy(ctx, {
       name: String(raw.name ?? ""),
       businessHoursMode: raw.businessHoursMode === "24x7" ? "24x7" : "business_hours",
@@ -28,25 +43,25 @@ export async function createSlaPolicyAction(_: ActionState, form: FormData): Pro
       levels: [
         {
           level: 1,
-          acceptWithinMin: Number(raw.l1Accept) || 15,
-          resolveWithinMin: Number(raw.l1Resolve) || 180,
-          escalateAfterMin: Number(raw.l1Resolve) || 180,
+          acceptWithinMin: parseNum(raw.l1Accept, 15),
+          resolveWithinMin: l1Resolve,
+          escalateAfterMin: l1Resolve,
           targetRole: String(raw.l1Role || "l1_staff"),
           action: String(raw.l1Action || "both") as "notify" | "transfer" | "both",
         },
         {
           level: 2,
-          acceptWithinMin: Number(raw.l2Accept) || 30,
-          resolveWithinMin: Number(raw.l2Resolve) || 300,
-          escalateAfterMin: Number(raw.l2Resolve) || 300,
+          acceptWithinMin: parseNum(raw.l2Accept, 30),
+          resolveWithinMin: l2Resolve,
+          escalateAfterMin: l2Resolve,
           targetRole: String(raw.l2Role || "l2_supervisor"),
           action: String(raw.l2Action || "both") as "notify" | "transfer" | "both",
         },
         {
           level: 3,
-          acceptWithinMin: Number(raw.l3Accept) || 60,
-          resolveWithinMin: Number(raw.l3Resolve) || 480,
-          escalateAfterMin: Number(raw.l3Resolve) || 480,
+          acceptWithinMin: parseNum(raw.l3Accept, 60),
+          resolveWithinMin: l3Resolve,
+          escalateAfterMin: l3Resolve,
           targetRole: String(raw.l3Role || "l3_manager"),
           action: String(raw.l3Action || "both") as "notify" | "transfer" | "both",
         },
@@ -70,7 +85,7 @@ export async function runSlaSweepNowAction(): Promise<
   const ctx = await requireTenantContext()
   return runAction(async () => {
     assertCan(ctx, "settings:sla")
-    const result = await sweepSlaEscalations()
+    const result = await sweepSlaEscalations(new Date(), { tenantId: ctx.tenantId })
     revalidatePath("/settings")
     revalidatePath("/tickets")
     return result
@@ -86,9 +101,10 @@ export async function createAssignmentRuleAction(
     const raw = formObject(form, ["userIds"])
     await createAssignmentRule(ctx, {
       name: String(raw.name ?? ""),
-      priority: Number(raw.priority) || 10,
+      priority: parseNum(raw.priority, 10),
       conditions: {
         branchId: String(raw.branchId ?? "") || null,
+        locationId: String(raw.locationId ?? "") || null,
         categoryId: String(raw.categoryId ?? "") || null,
         severity: String(raw.severity ?? "") || null,
       },
@@ -154,12 +170,11 @@ export async function updateAutomationSettingsAction(
   const ctx = await requireTenantContext()
   return runAction(async () => {
     assertCan(ctx, "settings:manage")
-    const autoCloseDays = Math.max(0, Math.min(90, Number(form.get("autoCloseDays")) || 0))
-    const repeatRcaThreshold = Math.max(
-      2,
-      Math.min(20, Number(form.get("repeatRcaThreshold")) || 3),
-    )
-    await updateTenantSettings(ctx, { autoCloseDays, repeatRcaThreshold })
+    const input = parseInput(automationSchema, {
+      autoCloseDays: form.get("autoCloseDays"),
+      repeatRcaThreshold: form.get("repeatRcaThreshold"),
+    })
+    await updateTenantSettings(ctx, input)
     revalidatePath("/settings")
   })
 }

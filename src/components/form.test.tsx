@@ -128,6 +128,24 @@ describe("RadioCards", () => {
     expect(screen.getByRole("radio", { name: "Maintenance" })).toHaveAttribute("value", "b")
     expect(screen.getByText("Enter a valid email")).toBeInTheDocument()
   })
+
+  it("keeps the accessible name to the label when an option has an icon", async () => {
+    const { RadioCards } = await import("@/components/form")
+    render(
+      <RadioCards
+        legend="How urgent is it?"
+        name="urgency"
+        state={null}
+        options={[
+          { value: "normal", label: "It can wait", icon: "clock" },
+          { value: "urgent", label: "Urgent", icon: "warning", tone: "alert" },
+        ]}
+      />,
+    )
+    const urgent = screen.getByRole("radio", { name: "Urgent" })
+    expect(urgent.closest("label")?.querySelector("svg")).toHaveAttribute("aria-hidden", "true")
+    expect(urgent.closest("label")).toHaveAttribute("data-tone", "alert")
+  })
 })
 
 describe("FormTextarea", () => {

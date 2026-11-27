@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 import { Suspense } from "react"
 import { PrintButton } from "@/components/print-button"
 import { PageSkeleton } from "@/components/skeleton"
@@ -12,6 +12,7 @@ import { listQrCodes } from "@/server/modules/qr-codes"
 import { getTenant } from "@/server/modules/tenants"
 import { publicQrUrl } from "@/server/public-url"
 import { qrSvg } from "@/server/qr-image"
+import { can } from "@/server/rbac/ability"
 import type { LocationDoc } from "@/server/repositories"
 
 export const metadata: Metadata = { title: "Print QR codes · QR Feed", robots: { index: false } }
@@ -33,36 +34,43 @@ export default function PrintPage(props: PageProps<"/print/branches/[branchId]">
 async function Sheet({ params }: PageProps<"/print/branches/[branchId]">) {
   const { branchId } = await params
   const ctx = await requireTenantContext()
+  if (!can(ctx, "branch:read") || !can(ctx, "qr:read")) redirect("/dashboard")
   const branch = await getBranch(ctx, branchId).catch((err) => {
     if (err instanceof ApiError) notFound()
     throw err
   })
   const [codes, tree, tenant] = await Promise.all([
     listQrCodes(ctx, branch._id),
-    getLocationTree(ctx, branch._id),
+    can(ctx, "location:read", { branchId: branch._id }) ? getLocationTree(ctx, branch._id) : [],
     getTenant(ctx.tenantId),
   ])
-  const paths = new Map<string, string[]>()
+  const metaMap = new Map<string, { path: string[]; code?: string }>()
   const walk = (nodes: (LocationDoc & { children: never[] })[]) =>
     nodes.forEach((n) => {
-      paths.set(n._id.toHexString(), n.path)
+      metaMap.set(n._id.toHexString(), { path: n.path, code: n.code })
       walk(n.children)
     })
   walk(tree as never)
 
+  const customDomain = tenant?.branding?.customDomain
   const stickers = await Promise.all(
     codes
-      .map((q) => ({ q, path: paths.get(q.locationId.toHexString()) ?? [] }))
+      .filter((q) => metaMap.has(q.locationId.toHexString()))
+      .map((q) => ({ q, ...metaMap.get(q.locationId.toHexString())! }))
       .sort((a, b) =>
         a.path.join(" ").localeCompare(b.path.join(" "), undefined, { numeric: true }),
       )
-      .map(async ({ q, path }) => ({
-        id: q._id.toHexString(),
-        path,
-        url: publicQrUrl(q.shortCode),
-        // Generated on our server from our own URL, so it's safe to inline.
-        svg: await qrSvg(publicQrUrl(q.shortCode)),
-      })),
+      .map(async ({ q, path, code }) => {
+        const url = publicQrUrl(q.shortCode, customDomain)
+        return {
+          id: q._id.toHexString(),
+          path,
+          code,
+          url,
+          // Generated on our server from our own URL, so it's safe to inline.
+          svg: await qrSvg(url),
+        }
+      }),
   )
 
   return (
@@ -104,6 +112,9 @@ async function Sheet({ params }: PageProps<"/print/branches/[branchId]">) {
               dangerouslySetInnerHTML={{ __html: s.svg }}
             />
             <p className="text-sm font-semibold">Scan to report a problem</p>
+            {s.code && (
+              <p className="mt-0.5 font-mono text-xs font-semibold text-gray-700">{s.code}</p>
+            )}
             <p className="mt-1 font-mono text-[10px] break-all text-gray-500">{s.url}</p>
           </li>
         ))}

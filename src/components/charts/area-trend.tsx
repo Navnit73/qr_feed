@@ -1,5 +1,6 @@
 "use client"
 
+import { useId } from "react"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { ChartFigure } from "@/components/charts/chart-figure"
 import { chartConfig, type Series } from "@/components/charts/chart-config"
@@ -27,6 +28,7 @@ export function AreaTrend({
   stacked?: boolean
   className?: string
 }) {
+  const uid = useId().replace(/:/g, "")
   const config = chartConfig(series)
   return (
     <ChartFigure title={title} data={data} xKey={xKey} series={series} className={className}>
@@ -34,7 +36,7 @@ export function AreaTrend({
         <AreaChart data={data} margin={{ left: -16, right: 8, top: 8 }}>
           <defs>
             {series.map((s) => (
-              <linearGradient key={s.key} id={`fill-${s.key}`} x1="0" y1="0" x2="0" y2="1">
+              <linearGradient key={s.key} id={`fill-${uid}-${s.key}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor={`var(--color-${s.key})`} stopOpacity={0.35} />
                 <stop offset="95%" stopColor={`var(--color-${s.key})`} stopOpacity={0.02} />
               </linearGradient>
@@ -51,7 +53,7 @@ export function AreaTrend({
               type="monotone"
               stroke={`var(--color-${s.key})`}
               strokeWidth={2}
-              fill={`url(#fill-${s.key})`}
+              fill={`url(#fill-${uid}-${s.key})`}
               stackId={stacked ? "a" : undefined}
             />
           ))}

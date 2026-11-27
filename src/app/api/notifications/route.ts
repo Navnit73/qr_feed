@@ -1,5 +1,5 @@
 import { ok, withApi } from "@/lib/api/response"
-import { requireTenantContext } from "@/server/auth/session"
+import { requireApiTenantContext } from "@/server/auth/session"
 import {
   listNotifications,
   markAllRead,
@@ -8,7 +8,7 @@ import {
 } from "@/server/modules/notifications"
 
 export const GET = withApi(async () => {
-  const ctx = await requireTenantContext()
+  const ctx = await requireApiTenantContext()
   const [items, unread] = await Promise.all([
     listNotifications(ctx, 20),
     unreadNotificationCount(ctx),
@@ -28,7 +28,7 @@ export const GET = withApi(async () => {
 })
 
 export const PATCH = withApi(async (req: Request) => {
-  const ctx = await requireTenantContext()
+  const ctx = await requireApiTenantContext()
   const body = (await req.json().catch(() => ({}))) as { id?: string; markAllRead?: boolean }
   if (body.markAllRead) {
     await markAllRead(ctx)

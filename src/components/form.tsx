@@ -203,13 +203,22 @@ export function FormMessage({ state, success }: { state: State; success?: string
       </Alert>
     ) : null
   }
+  const nestedDetails = state.error.details
+    ? Object.entries(state.error.details)
+        .filter(([key]) => key.includes(".") || key === "_form" || key === "actions")
+        .flatMap(([, msgs]) => msgs)
+        .filter(Boolean)
+        .slice(0, 3)
+    : []
   return (
     <Alert variant="destructive">
       <Icon name="error" />
       <AlertTitle>{state.error.message}</AlertTitle>
-      {state.error.code === "NETWORK" && (
+      {state.error.code === "NETWORK" ? (
         <AlertDescription>Check your connection and try again.</AlertDescription>
-      )}
+      ) : nestedDetails.length > 0 ? (
+        <AlertDescription>{nestedDetails.join(" · ")}</AlertDescription>
+      ) : null}
     </Alert>
   )
 }
@@ -256,6 +265,14 @@ export function FormTextarea({
  * Big tappable choice cards (one answer). Native radios underneath, so arrow keys, form
  * submission and screen readers all work without JS.
  */
+export type RadioCardOption = {
+  value: string
+  label: string
+  icon?: IconName
+  /** "alert" tints the checked card destructive, for choices like "Urgent". */
+  tone?: "default" | "alert"
+}
+
 export function RadioCards({
   legend,
   name,
@@ -266,7 +283,7 @@ export function RadioCards({
 }: {
   legend: string
   name: string
-  options: { value: string; label: string }[]
+  options: RadioCardOption[]
   state: State
   defaultValue?: string
   columns?: 1 | 2
@@ -284,21 +301,42 @@ export function RadioCards({
         {legend}
       </p>
       <div className={cn("grid gap-2", columns === 2 && "grid-cols-2")}>
-        {options.map((o) => (
-          <label
-            key={o.value}
-            className="flex min-h-12 cursor-pointer items-center rounded-xl border px-3 py-2 text-sm font-medium transition-colors has-checked:border-primary has-checked:bg-primary/10 has-focus-visible:ring-3 has-focus-visible:ring-ring/50"
-          >
-            <input
-              type="radio"
-              name={name}
-              value={o.value}
-              defaultChecked={o.value === defaultValue}
-              className="sr-only"
-            />
-            {o.label}
-          </label>
-        ))}
+        {options.map((o) => {
+          const alert = o.tone === "alert"
+          return (
+            <label
+              key={o.value}
+              data-tone={o.tone ?? "default"}
+              className={cn(
+                "group flex min-h-12 cursor-pointer items-center gap-2.5 rounded-xl border bg-background px-3 py-2 text-sm font-medium transition-colors active:scale-[0.98] has-focus-visible:ring-3 has-focus-visible:ring-ring/50",
+                alert
+                  ? "has-checked:border-destructive has-checked:bg-destructive/10 has-checked:text-destructive"
+                  : "has-checked:border-primary has-checked:bg-primary/10",
+              )}
+            >
+              <input
+                type="radio"
+                name={name}
+                value={o.value}
+                defaultChecked={o.value === defaultValue}
+                className="sr-only"
+              />
+              {o.icon && (
+                <span
+                  className={cn(
+                    "grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground transition-colors",
+                    alert
+                      ? "group-has-checked:bg-destructive group-has-checked:text-destructive-foreground"
+                      : "group-has-checked:bg-primary group-has-checked:text-primary-foreground",
+                  )}
+                >
+                  <Icon name={o.icon} className="size-4" />
+                </span>
+              )}
+              <span className="leading-snug">{o.label}</span>
+            </label>
+          )
+        })}
       </div>
       <Help id={`${id}-help`} error={error} />
     </div>
@@ -306,7 +344,19 @@ export function RadioCards({
 }
 
 /** 1–5 star rating as a radio group. Stars fill up to the chosen one (CSS only). */
-export function RatingInput({ label, name, state }: { label: string; name: string; state: State }) {
+export function RatingInput({
+  label,
+  name,
+  state,
+  starSingular = "star",
+  starPlural = "stars",
+}: {
+  label: string
+  name: string
+  state: State
+  starSingular?: string
+  starPlural?: string
+}) {
   const id = useId()
   const error = errorFor(state, name)
   return (
@@ -319,13 +369,13 @@ export function RatingInput({ label, name, state }: { label: string; name: strin
         {[5, 4, 3, 2, 1].map((n) => (
           <label
             key={n}
-            className="peer grid size-12 cursor-pointer place-items-center rounded-xl text-foreground/15 transition-colors peer-hover:text-secondary peer-has-checked:text-secondary hover:text-secondary has-checked:text-secondary has-focus-visible:ring-3 has-focus-visible:ring-ring/50"
+            className="peer grid size-12 cursor-pointer place-items-center rounded-xl text-foreground/20 transition-colors peer-hover:text-amber-500 peer-has-checked:text-amber-500 hover:text-amber-500 has-checked:text-amber-500 has-focus-visible:ring-3 has-focus-visible:ring-ring/50 dark:peer-hover:text-amber-400 dark:peer-has-checked:text-amber-400 dark:hover:text-amber-400 dark:has-checked:text-amber-400"
           >
             <input
               type="radio"
               name={name}
               value={n}
-              aria-label={`${n} ${n === 1 ? "star" : "stars"}`}
+              aria-label={`${n} ${n === 1 ? starSingular : starPlural}`}
               className="sr-only"
             />
             <Icon name="rating" className="size-8 fill-current" />

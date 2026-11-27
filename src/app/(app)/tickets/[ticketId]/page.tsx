@@ -13,17 +13,34 @@ import { timeAgo } from "@/lib/relative-time"
 import { SEVERITY_BADGE, statusLabel } from "@/lib/ticket-display"
 import { availableTicketEvents } from "@/lib/ticket-state-machine"
 import { requireTenantContext } from "@/server/auth/session"
+import { getBranch } from "@/server/modules/branches"
 import { getTicketDetail } from "@/server/modules/tickets"
 import { can } from "@/server/rbac/ability"
-import { AssignDialog, CommentComposer, TagsEditor, TicketActionToolbar } from "./detail-controls"
+import {
+  AssignDialog,
+  CommentComposer,
+  MergeTicketDialog,
+  TagsEditor,
+  TicketActionToolbar,
+} from "./detail-controls"
 
 export const metadata: Metadata = { title: "Ticket detail · QR Feed" }
 
-const fmt = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "short",
-  timeZone: "UTC",
-})
+function makeFormatter(timeZone: string) {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone,
+    })
+  } catch {
+    return new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC",
+    })
+  }
+}
 
 export default async function TicketDetailPage({ params }: PageProps<"/tickets/[ticketId]">) {
   const ctx = await requireTenantContext()
@@ -31,17 +48,47 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
   const { ticketId } = await params
 
   const detail = await getTicketDetail(ctx, ticketId).catch((err) => {
-    if (err instanceof ApiError && (err.code === "NOT_FOUND" || err.code === "VALIDATION")) {
+    if (
+      err instanceof ApiError &&
+      (err.code === "NOT_FOUND" || err.code === "VALIDATION" || err.code === "FORBIDDEN")
+    ) {
       notFound()
     }
     throw err
   })
 
-  const { ticket, comments, activities, category, members, repeatCount30d, rcaRecommended } = detail
+  const {
+    ticket,
+    comments,
+    activities,
+    category,
+    members,
+    repeatCount30d,
+    repeatThreshold,
+    rcaRecommended,
+  } = detail
+  const rcaReasons = [
+    category?.requiresRCA ? "category requires RCA" : null,
+    ticket.severity === "critical" ? "critical severity" : null,
+    repeatCount30d >= repeatThreshold ? `${repeatCount30d} repeat reports in 30 days` : null,
+    (ticket.currentLevel ?? 1) >= 3 ? "L3 escalation" : null,
+  ].filter(Boolean)
   const id = ticket._id.toHexString()
   const branchId = ticket.branchId.toHexString()
+  const branch = can(ctx, "branch:read", { branchId: ticket.branchId })
+    ? await getBranch(ctx, ticket.branchId).catch(() => null)
+    : null
+  const tz = branch?.timezone ?? "UTC"
+  const fmt = makeFormatter(tz)
   const events = availableTicketEvents(ticket.status, ctx.permissions)
   const memberOptions = members.map((m) => ({ value: m.userId, label: m.name }))
+  const canRemark =
+    can(ctx, "ticket:work", { branchId: ticket.branchId }) ||
+    can(ctx, "ticket:verify", { branchId: ticket.branchId })
+  const canMerge =
+    can(ctx, "ticket:close", { branchId: ticket.branchId }) &&
+    ticket.status !== "closed" &&
+    ticket.status !== "cancelled"
   // eslint-disable-next-line react-hooks/purity -- single server render per request
   const now = Date.now()
 
@@ -62,6 +109,7 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
         ]}
         actions={
           <>
+            {canMerge && <MergeTicketDialog ticketId={id} ticketNumber={ticket.number} />}
             <Link
               href={`/print/tickets/${id}`}
               className={buttonVariants({ variant: "outline", size: "lg" })}
@@ -119,7 +167,8 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
             </Badge>
           )}
           <span className="ml-auto text-xs text-muted-foreground">
-            Reported {timeAgo(ticket.createdAt, now)} ({fmt.format(ticket.createdAt)} UTC)
+            Reported {timeAgo(ticket.createdAt, now)} ({fmt.format(ticket.createdAt)}{" "}
+            {tz === "UTC" ? "UTC" : tz.replaceAll("_", " ")})
           </span>
         </div>
 
@@ -133,16 +182,30 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
         )}
       </div>
 
+      {ticket.duplicateOf && (
+        <Alert variant="info" className="mb-6">
+          <Icon name="info" />
+          <AlertTitle>Merged duplicate</AlertTitle>
+          <AlertDescription>
+            This ticket was merged into{" "}
+            <Link
+              href={`/tickets?q=${encodeURIComponent(ticket.duplicateOf)}`}
+              className="font-mono font-semibold text-primary hover:underline"
+            >
+              {ticket.duplicateOf}
+            </Link>
+            .
+          </AlertDescription>
+        </Alert>
+      )}
+
       {rcaRecommended && !ticket.rcaId && (
         <Alert variant="warning" className="mb-6">
           <Icon name="rca" />
           <AlertTitle>Root Cause Analysis recommended</AlertTitle>
           <AlertDescription>
-            Triggered by policy ({category?.requiresRCA ? "category requires RCA" : ""}
-            {ticket.severity === "critical" ? " critical severity" : ""}
-            {repeatCount30d >= 3 ? ` ${repeatCount30d} repeat reports in 30 days` : ""}
-            {(ticket.currentLevel ?? 1) >= 3 ? " L3 escalation" : ""}). Convert this ticket to an
-            RCA/CAPA record to track preventive action.
+            Triggered by policy ({rcaReasons.join(", ")}). Convert this ticket to an RCA/CAPA record
+            to track preventive action.
           </AlertDescription>
         </Alert>
       )}
@@ -156,7 +219,10 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
             </p>
             {ticket.rating !== null && (
               <p className="mt-3 flex items-center gap-1.5 text-sm">
-                <Icon name="rating" className="size-4 fill-current text-secondary" />
+                <Icon
+                  name="rating"
+                  className="size-4 fill-current text-amber-500 dark:text-amber-400"
+                />
                 <span className="font-semibold tabular-nums">{ticket.rating} / 5</span>
                 <span className="text-muted-foreground">guest rating</span>
               </p>
@@ -261,9 +327,7 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
                 </ul>
               )}
 
-              {can(ctx, "ticket:work", { branchId: ticket.branchId }) && (
-                <CommentComposer ticketId={id} branchId={branchId} />
-              )}
+              {canRemark && <CommentComposer ticketId={id} branchId={branchId} />}
             </div>
           </PanelCard>
 
@@ -281,7 +345,7 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <span className="font-mono text-xs font-semibold">{a.type}</span>
                     <span className="text-xs text-muted-foreground tabular-nums">
-                      {fmt.format(a.at)} UTC
+                      {fmt.format(a.at)}
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground">
@@ -311,6 +375,8 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
           <PanelCard
             title="Assignment"
             action={
+              events.includes("assign") &&
+              !["closed", "cancelled", "pending_verification"].includes(ticket.status) &&
               can(ctx, "ticket:assign", { branchId: ticket.branchId }) && (
                 <AssignDialog
                   ticketId={id}
@@ -341,11 +407,11 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
               <dl className="space-y-2 text-sm">
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">Accept due</dt>
-                  <dd className="tabular-nums">{fmt.format(ticket.sla.acceptDueAt)} UTC</dd>
+                  <dd className="tabular-nums">{fmt.format(ticket.sla.acceptDueAt)}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">Resolve due</dt>
-                  <dd className="tabular-nums">{fmt.format(ticket.sla.resolveDueAt)} UTC</dd>
+                  <dd className="tabular-nums">{fmt.format(ticket.sla.resolveDueAt)}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">Paused time</dt>
@@ -357,7 +423,7 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
             ) : (
               <p className="text-sm text-muted-foreground">
                 No SLA policy attached. Configure policies in{" "}
-                <Link href="/settings" className="text-primary hover:underline">
+                <Link href="/settings?tab=sla" className="text-primary hover:underline">
                   Settings → SLA
                 </Link>
                 .
@@ -404,9 +470,7 @@ export default async function TicketDetailPage({ params }: PageProps<"/tickets/[
                 ))
               )}
             </div>
-            {can(ctx, "ticket:work", { branchId: ticket.branchId }) && (
-              <TagsEditor ticketId={id} initial={ticket.tags ?? []} />
-            )}
+            {canRemark && <TagsEditor ticketId={id} initial={ticket.tags ?? []} />}
           </PanelCard>
         </div>
       </div>

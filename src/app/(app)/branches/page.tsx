@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
-import { timeZoneOptions } from "@/lib/time-zones"
 import Link from "next/link"
+import { redirect } from "next/navigation"
+import { timeZoneOptions } from "@/lib/time-zones"
 import { EmptyState } from "@/components/cards/empty-state"
 import { Icon } from "@/components/icons"
 import { PageHeader } from "@/components/page-header"
@@ -13,6 +14,7 @@ export const metadata: Metadata = { title: "Branches · QR Feed" }
 
 export default async function BranchesPage() {
   const ctx = await requireTenantContext()
+  if (!can(ctx, "branch:read")) redirect("/dashboard")
   const list = await listBranches(ctx)
   const canAdd = can(ctx, "branch:manage") && ctx.branchScope === "all"
   const timeZones = timeZoneOptions()

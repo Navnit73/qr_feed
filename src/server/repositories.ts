@@ -48,6 +48,7 @@ export type MemberDoc = TenantDoc & {
   userId: string
   email: string
   name: string
+  phone?: string
   /** System role keys (`l1_staff`) or `custom:<roleId>`. */
   roles: string[]
   branchIds: ObjectId[]
@@ -138,6 +139,7 @@ export const OPEN_TICKET_STATUSES: TicketStatus[] = TICKET_STATUSES.filter(
 export type TicketSlaState = {
   acceptDueAt: Date
   resolveDueAt: Date
+  levelStartedAt?: Date | null
   acceptedAt?: Date | null
   resolvedAt?: Date | null
   breached: boolean
@@ -204,6 +206,8 @@ export type AttachmentDoc = TenantDoc & {
   entityId?: ObjectId
   /** For unauthenticated QR form uploads before ticket submission: sha256 of claim token. */
   claimTokenHash?: string
+  /** sha256 of the submitting reporter's tracking token, so duplicate reporters never see each other's photos. */
+  reporterTokenHash?: string
   claimed?: boolean
 }
 export const attachments = defineRepository<AttachmentDoc>("attachments")
@@ -401,6 +405,7 @@ export type CapaDoc = TenantDoc & {
   number: string
   rcaId: ObjectId
   rcaNumber: string
+  branchId?: ObjectId | null
   title: string
   type: "correction" | "corrective" | "preventive"
   actions: CapaActionItem[]
@@ -523,6 +528,8 @@ export type ApiKeyDoc = TenantDoc & {
   prefix: string
   keyHash: string
   scopes: string[]
+  /** Inherited from the creator so branch-scoped users can never escalate via API keys. */
+  branchScope?: "all" | ObjectId[]
   createdBy: string
   lastUsedAt?: Date | null
   revokedAt?: Date | null
@@ -534,6 +541,8 @@ export type WebhookDoc = TenantDoc & {
   url: string
   events: string[]
   secretHash: string
+  /** AES-256-GCM encrypted signing secret used to sign outgoing X-QRFeed-Signature headers. */
+  signingSecretEnc?: string
   secretPreview: string
   active: boolean
 }

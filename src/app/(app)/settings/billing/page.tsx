@@ -16,7 +16,7 @@ const fmtDate = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone
 
 export default async function BillingPage() {
   const ctx = await requireTenantContext()
-  if (!can(ctx, "tenant:manage")) redirect("/settings")
+  if (!can(ctx, "billing:manage") && !can(ctx, "tenant:manage")) redirect("/settings")
   const billing = await getBillingSummary(ctx)
   const canBill = can(ctx, "billing:manage")
   const plans: PlanKey[] = ["starter", "growth", "business", "enterprise"]
@@ -91,34 +91,45 @@ export default async function BillingPage() {
         {billing.invoices.length === 0 ? (
           <p className="text-sm text-muted-foreground">No invoices issued yet.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-muted text-left text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2 font-medium">Invoice</th>
-                <th className="px-4 py-2 font-medium">Plan</th>
-                <th className="px-4 py-2 font-medium">Amount</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {billing.invoices.map((inv) => (
-                <tr key={inv.id}>
-                  <td className="px-4 py-2 font-mono text-xs">{inv.id}</td>
-                  <td className="px-4 py-2 capitalize">{inv.plan}</td>
-                  <td className="px-4 py-2 tabular-nums">${inv.amountUsd}</td>
-                  <td className="px-4 py-2">
-                    <Badge variant="success" className="capitalize">
-                      {inv.status}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-2 text-muted-foreground tabular-nums">
-                    {fmtDate.format(inv.issuedAt)}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead className="bg-muted text-left text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2 font-medium">Invoice</th>
+                  <th className="px-4 py-2 font-medium">Plan</th>
+                  <th className="px-4 py-2 font-medium">Amount</th>
+                  <th className="px-4 py-2 font-medium">Status</th>
+                  <th className="px-4 py-2 font-medium">Date</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y">
+                {billing.invoices.map((inv) => (
+                  <tr key={inv.id}>
+                    <td className="px-4 py-2 font-mono text-xs">{inv.id}</td>
+                    <td className="px-4 py-2 capitalize">{inv.plan}</td>
+                    <td className="px-4 py-2 tabular-nums">${inv.amountUsd}</td>
+                    <td className="px-4 py-2">
+                      <Badge
+                        variant={
+                          inv.status === "paid"
+                            ? "success"
+                            : inv.status === "open"
+                              ? "warning"
+                              : "muted"
+                        }
+                        className="capitalize"
+                      >
+                        {inv.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-muted-foreground tabular-nums">
+                      {fmtDate.format(inv.issuedAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </PanelCard>
     </>

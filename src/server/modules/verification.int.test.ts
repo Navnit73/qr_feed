@@ -8,7 +8,13 @@ import { createQrCode } from "@/server/modules/qr-codes"
 import { sweepAutoClose } from "@/server/modules/sla"
 import { updateTenantSettings } from "@/server/modules/tenants"
 import { applyTicketTransition, queryTickets } from "@/server/modules/tickets"
+import { storeTenantAttachment } from "@/server/storage"
 import { setupTestDb } from "@/test/db"
+
+const MINIMAL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+  "base64",
+)
 
 setupTestDb()
 
@@ -51,16 +57,30 @@ describe("Phase 5 verification & closure workflow (F-5.1–F-5.4)", () => {
     await applyTicketTransition(ctx, ticket._id, { type: "accept" })
     await applyTicketTransition(ctx, ticket._id, { type: "start" })
 
-    // F-5.1: submitting without evidence fails
+    // F-5.1: submitting without evidence (or with a forged attachment ID) fails
     await expect(
       applyTicketTransition(ctx, ticket._id, { type: "submit", note: "Fixed lamp" }),
     ).rejects.toThrow(/photo/i)
+    await expect(
+      applyTicketTransition(ctx, ticket._id, {
+        type: "submit",
+        note: "Fixed lamp",
+        resolutionAttachments: ["forged-att-id"],
+      }),
+    ).rejects.toThrow(/photo/i)
 
-    // Submitting with evidence succeeds
+    // Submitting with a real tenant attachment succeeds
+    const att = await storeTenantAttachment(ctx, {
+      scope: "ticket",
+      branchId: branch._id,
+      entityId: ticket._id,
+      filename: "lamp-fixed.png",
+      buffer: MINIMAL_PNG,
+    })
     await applyTicketTransition(ctx, ticket._id, {
       type: "submit",
       note: "Replaced lamp bulb and tested",
-      resolutionAttachments: ["att-1"],
+      resolutionAttachments: [att._id.toHexString()],
     })
 
     // F-5.2: verifier reopens with instructions -> increments reopenCount

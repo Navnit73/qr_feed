@@ -17,12 +17,16 @@ export function CreateRcaDialog({
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(defaultOpen)
+  const [activeTicket, setActiveTicket] = useState(sourceTicket ?? null)
   return (
     <Modal
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setActiveTicket(null)
+      }}
       size="lg"
-      title={sourceTicket ? `Convert ${sourceTicket.number} to RCA` : "New Root Cause Analysis"}
+      title={activeTicket ? `Convert ${activeTicket.number} to RCA` : "New Root Cause Analysis"}
       description="Investigate systemic or repeat issues with 5 Whys, Fishbone (6M) and CAPA actions."
       trigger={
         <Button size="xl">
@@ -32,9 +36,10 @@ export function CreateRcaDialog({
     >
       {open && (
         <CreateRcaForm
-          sourceTicket={sourceTicket}
+          sourceTicket={activeTicket}
           onDone={(id) => {
             setOpen(false)
+            setActiveTicket(null)
             if (id) router.push(`/rca/${id}`)
           }}
         />

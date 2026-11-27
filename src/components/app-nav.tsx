@@ -39,7 +39,7 @@ export function AppNav({
       {groups.map((group) => (
         <div key={group}>
           {!collapsed && (
-            <p className="mb-1 px-3 text-[0.68rem] font-semibold tracking-[0.14em] text-sidebar-foreground/55 uppercase">
+            <p className="mb-1 px-3 text-[0.68rem] font-semibold tracking-[0.14em] text-sidebar-foreground/75 uppercase">
               {group}
             </p>
           )}

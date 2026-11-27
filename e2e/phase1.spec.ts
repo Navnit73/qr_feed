@@ -46,6 +46,17 @@ test("signed-out visitors are sent to sign-in and returned afterwards", async ({
   await expect(page).toHaveURL(/\/sign-in\?next=%2Fusers/)
 })
 
+test("one-click demo login signs in and loads the demo dashboard with filters", async ({
+  page,
+}) => {
+  await page.goto("/sign-in")
+  await page.getByRole("button", { name: /try live demo/i }).click()
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 })
+  await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible()
+  await expect(page.getByText("Sunrise Hospital").filter({ visible: true }).first()).toBeVisible()
+  await expect(page.getByLabel("Date range")).toBeVisible()
+})
+
 test("a new user signs up and creates their organisation", async ({ page }) => {
   const { orgName } = await newAdmin(page)
   await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible()
@@ -97,6 +108,22 @@ test("an admin builds a branch's location tree", async ({ page }) => {
   const tree = page.getByRole("list", { name: "Locations" })
   const floor = tree.getByRole("listitem").filter({ hasText: "Floor 2" }).first()
   await expect(floor).toContainText("Washroom F2")
+
+  // Site map: areas collapse, row actions sit behind one menu, the overview counts spots.
+  await expect(page.getByRole("region", { name: "Branch overview" })).toContainText("QR spots")
+  await expect(page.getByRole("region", { name: /collecting feedback|Almost live/ })).toBeVisible()
+  const washroom = tree.getByText("Washroom F2", { exact: true })
+  await page.getByRole("button", { name: "Collapse Floor 2" }).click()
+  await expect(washroom).toBeHidden()
+  await page.getByRole("button", { name: "Expand Floor 2" }).click()
+  await expect(washroom).toBeVisible()
+  await page.getByRole("button", { name: "More actions for Washroom F2" }).click()
+  await page.getByRole("menuitem", { name: "Rename" }).click()
+  dialog = page.getByRole("dialog", { name: "Rename Washroom F2" })
+  await dialog.getByLabel("Name").fill("Washroom F2 East")
+  await dialog.getByRole("button", { name: "Rename" }).click()
+  await expect(dialog).toBeHidden()
+  await expect(tree.getByText("Washroom F2 East", { exact: true })).toBeVisible()
 })
 
 test("an invited teammate joins with only the access they were given", async ({ page }) => {

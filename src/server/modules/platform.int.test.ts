@@ -1,6 +1,9 @@
+import { createHmac } from "node:crypto"
 import { describe, expect, it } from "vitest"
+import type { ApiError } from "@/lib/api/errors"
 import { verifyChain } from "@/server/audit/audit-log"
 import { resolveTenantContext } from "@/server/auth/context"
+import { createBranch } from "@/server/modules/branches"
 import { listCategories } from "@/server/modules/categories"
 import { submitFeedback } from "@/server/modules/intake"
 import { createLocation } from "@/server/modules/locations"
@@ -15,10 +18,11 @@ import {
   getBillingSummary,
   revokeApiKey,
   signWebhookPayload,
+  verifyStripeSignature,
 } from "@/server/modules/platform"
 import { createQrCode } from "@/server/modules/qr-codes"
 import { applyTicketTransition, queryTickets } from "@/server/modules/tickets"
-import { setupTestDb } from "@/test/db"
+import { setupTestDb, testContext } from "@/test/db"
 
 setupTestDb()
 
@@ -103,5 +107,60 @@ describe("Phase 9 billing, API keys, webhooks & data governance (F-9.1–F-9.5)"
     expect(afterAnon.reporter.email).toBeUndefined()
 
     expect((await verifyChain(ctx)).ok).toBe(true)
+  })
+
+  it("blocks SSRF webhook URLs, enterprise self-upgrades, invalid Stripe signatures, and cross-branch API keys", async () => {
+    const { tenant, branch } = await createOrganization(
+      { id: "owner-sec", email: "owner@sec.test", name: "Owner Sec" },
+      { orgName: "Sec Org", industry: "other", branchName: "HQ", timezone: "UTC" },
+    )
+    const ctx = (await resolveTenantContext("owner-sec", tenant._id))!
+    const b2 = await createBranch(ctx, { name: "Annex", timezone: "UTC" })
+
+    // SSRF webhook targets blocked
+    for (const badUrl of [
+      "http://example.com/hook",
+      "https://127.0.0.1/hook",
+      "https://169.254.169.254/latest/meta-data/",
+      "https://localhost:8443/hook",
+    ]) {
+      await expect(
+        createWebhook(ctx, { name: "Bad", url: badUrl, events: ["ticket.created"] }),
+      ).rejects.toMatchObject({ code: "VALIDATION" } satisfies Partial<ApiError>)
+    }
+
+    // Free self-upgrade to enterprise is rejected
+    await expect(changeTenantPlan(ctx, "enterprise", "sandbox")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    } satisfies Partial<ApiError>)
+
+    // Stripe signature verification (valid, wrong secret, stale timestamp)
+    const body = JSON.stringify({ event: "plan.updated" })
+    const secret = "whsec_test_secret_1234"
+    const nowSec = Math.floor(Date.now() / 1000)
+    const sig = createHmac("sha256", secret).update(`${nowSec}.${body}`).digest("hex")
+    expect(verifyStripeSignature(secret, body, `t=${nowSec},v1=${sig}`)).toBe(true)
+    expect(verifyStripeSignature(secret, body, `t=${nowSec},v1=${"0".repeat(64)}`)).toBe(false)
+    const staleSec = nowSec - 600
+    const staleSig = createHmac("sha256", secret).update(`${staleSec}.${body}`).digest("hex")
+    expect(verifyStripeSignature(secret, body, `t=${staleSec},v1=${staleSig}`)).toBe(false)
+
+    // Branch-scoped actor's API key inherits creator's branchScope
+    const branchCtx = testContext({
+      tenantId: tenant._id,
+      actorId: "u-branch-sec",
+      roles: ["branch_admin"],
+      branchScope: [branch._id],
+      permissions: new Set(["settings:manage", "ticket:read"]),
+    })
+    const scopedKey = await createApiKey(branchCtx, {
+      name: "HQ Key",
+      scopes: ["ticket:read"],
+    })
+    const apiCtx = await authenticateApiKey(scopedKey.rawKey)
+    expect(apiCtx?.branchScope).not.toBe("all")
+    expect(
+      Array.isArray(apiCtx?.branchScope) && apiCtx.branchScope.some((id) => id.equals(b2._id)),
+    ).toBe(false)
   })
 })

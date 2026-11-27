@@ -11,8 +11,9 @@ import { Badge } from "@/components/ui/badge"
 import { requireTenantContext } from "@/server/auth/session"
 import { listAudits } from "@/server/modules/audits"
 import { listBranches } from "@/server/modules/branches"
+import { listAssignableMembers } from "@/server/modules/tickets"
 import { can } from "@/server/rbac/ability"
-import { CreateTemplateDialog, ScheduleAuditDialog } from "./audit-dialogs"
+import { CreateTemplateDialog, DeleteTemplateButton, ScheduleAuditDialog } from "./audit-dialogs"
 
 export const metadata: Metadata = { title: "Audits · QR Feed" }
 
@@ -22,17 +23,19 @@ export default async function AuditsPage() {
   const ctx = await requireTenantContext()
   if (!can(ctx, "audit:read")) redirect("/dashboard")
 
-  const [{ audits, templates, findings }, branches] = await Promise.all([
+  const canRun = can(ctx, "audit:run")
+  const [{ audits, templates, findings }, branches, auditorDocs] = await Promise.all([
     listAudits(ctx),
     can(ctx, "branch:read") ? listBranches(ctx) : [],
+    canRun ? listAssignableMembers(ctx) : [],
   ])
-  const canRun = can(ctx, "audit:run")
   const isReadOnlyAuditor = ctx.roles.includes("auditor") && !can(ctx, "tenant:manage")
   const branchOpts = branches.map((b) => ({ value: b._id.toHexString(), label: b.name }))
   const templateOpts = templates.map((t) => ({
     value: t._id.toHexString(),
     label: `${t.name} (${t.standard})`,
   }))
+  const auditorOpts = auditorDocs.map((m) => ({ value: m.userId, label: m.name }))
 
   const completed = audits.filter((a) => a.status === "completed")
   const avgScore = completed.length
@@ -49,7 +52,11 @@ export default async function AuditsPage() {
           canRun && (
             <>
               <CreateTemplateDialog />
-              <ScheduleAuditDialog branches={branchOpts} templates={templateOpts} />
+              <ScheduleAuditDialog
+                branches={branchOpts}
+                templates={templateOpts}
+                auditors={auditorOpts}
+              />
             </>
           )
         }
@@ -67,7 +74,11 @@ export default async function AuditsPage() {
       )}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Scheduled / Active" value={audits.length} icon="audit" />
+        <StatCard
+          label="Scheduled / Active"
+          value={audits.filter((a) => a.status !== "completed").length}
+          icon="audit"
+        />
         <StatCard label="Checklist templates" value={templates.length} icon="capa" />
         <StatCard label="Findings logged" value={findings.length} icon="warning" />
         <StatCard
@@ -164,11 +175,17 @@ export default async function AuditsPage() {
           ) : (
             <ul className="-mx-4 divide-y">
               {templates.map((t) => (
-                <li key={t._id.toHexString()} className="px-4 py-3">
-                  <p className="font-medium">{t.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t.standard} · {t.items.length} items
-                  </p>
+                <li
+                  key={t._id.toHexString()}
+                  className="flex items-center justify-between gap-2 px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{t.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t.standard} · {t.items.length} items
+                    </p>
+                  </div>
+                  {canRun && <DeleteTemplateButton id={t._id.toHexString()} name={t.name} />}
                 </li>
               ))}
             </ul>

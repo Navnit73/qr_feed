@@ -50,8 +50,12 @@ function InviteForm({
               variant="outline"
               size="xl"
               onClick={async () => {
-                await navigator.clipboard.writeText(state.data.link)
-                setCopied(true)
+                try {
+                  await navigator.clipboard.writeText(state.data.link)
+                  setCopied(true)
+                } catch {
+                  // Clipboard access denied or unavailable
+                }
               }}
             >
               {copied ? "Copied" : "Copy"}
@@ -126,7 +130,7 @@ function AccessForm({
   onDone,
 }: {
   memberId: string
-  current: { roles: string[]; branchIds: string[] }
+  current: { roles: string[]; branchIds: string[]; phone?: string }
   roles: Option[]
   branches: Option[]
   onDone: () => void
@@ -154,6 +158,14 @@ function AccessForm({
           state={state}
         />
       )}
+      <FormField
+        label="Phone (optional, for SMS/WhatsApp escalations)"
+        name="phone"
+        type="tel"
+        defaultValue={current.phone ?? ""}
+        placeholder="+91 98765 43210"
+        state={state}
+      />
       <FormMessage state={state} />
       <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
         <Button type="button" variant="ghost" size="xl" onClick={onDone}>
@@ -176,7 +188,7 @@ export function MemberActions({
   memberId: string
   name: string
   status: "active" | "inactive"
-  current: { roles: string[]; branchIds: string[] }
+  current: { roles: string[]; branchIds: string[]; phone?: string }
   roles: Option[]
   branches: Option[]
 }) {

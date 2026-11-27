@@ -58,7 +58,7 @@ export default function HelpPage() {
   return (
     <main className="mx-auto max-w-4xl px-4 py-12 sm:px-6">
       <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
-        <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+        <Link href="/sign-in" className={buttonVariants({ variant: "ghost", size: "sm" })}>
           ← Back to QR Feed
         </Link>
         <Link href="/dashboard" className={buttonVariants({ size: "lg" })}>

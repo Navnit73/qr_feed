@@ -20,6 +20,7 @@ export async function verifyTurnstile({
     const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
       method: "POST",
       body: new URLSearchParams({ secret, response: token, remoteip: ip }),
+      signal: AbortSignal.timeout(5_000),
     })
     const body = (await res.json()) as { success?: boolean }
     return body.success === true

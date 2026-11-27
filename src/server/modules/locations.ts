@@ -9,7 +9,7 @@ import { withTransaction } from "@/server/db/transaction"
 import { buildTree, canNest, LOCATION_TYPES } from "@/lib/location-tree"
 import { assertWithinLimit } from "@/server/modules/tenants"
 import { assertCan } from "@/server/rbac/ability"
-import { branches, locations } from "@/server/repositories"
+import { branches, locations, qrCodes } from "@/server/repositories"
 import { isDuplicateKey, name, objectId } from "@/server/validation"
 
 const createSchema = z.object({
@@ -40,39 +40,41 @@ export async function createLocation(ctx: TenantContext, raw: z.input<typeof cre
   const input = parseInput(createSchema, raw)
   assertCan(ctx, "location:manage", { branchId: input.branchId })
 
-  const branch = await branches.forTenant(ctx).findById(input.branchId)
-  if (!branch || branch.status !== "active") throw new ApiError("NOT_FOUND", "Branch not found.")
-
-  let ancestors: ObjectId[] = []
-  let path: string[] = [input.name]
-  if (input.parentId) {
-    const parent = await locations.forTenant(ctx).findById(input.parentId)
-    if (!parent || parent.status !== "active") {
-      throw new ApiError("NOT_FOUND", "Parent location not found.")
-    }
-    if (!parent.branchId.equals(input.branchId)) {
-      throw new ApiError("VALIDATION", "The parent is in a different branch.", {
-        parentId: ["Pick a parent in the same branch"],
-      })
-    }
-    if (!canNest(parent.type, input.type)) {
-      throw new ApiError("VALIDATION", `A ${input.type} can't go inside a ${parent.type}.`, {
-        type: [`A ${input.type} can't go inside a ${parent.type}`],
-      })
-    }
-    ancestors = [...parent.ancestors, parent._id]
-    path = [...parent.path, input.name]
-  }
-
   try {
     return await withTransaction(async (session) => {
+      const branch = await branches.forTenant(ctx).findById(input.branchId, { session })
+      if (!branch || branch.status !== "active") {
+        throw new ApiError("NOT_FOUND", "Branch not found.")
+      }
+
       const repo = locations.forTenant(ctx)
-      await assertWithinLimit(
-        ctx,
-        "locations",
-        await repo.count({ status: "active" }, { session }),
-        session,
-      )
+      let ancestors: ObjectId[] = []
+      let path: string[] = [input.name]
+      if (input.parentId) {
+        const parent = await repo.findById(input.parentId, { session })
+        if (!parent || parent.status !== "active") {
+          throw new ApiError("NOT_FOUND", "Parent location not found.")
+        }
+        if (!parent.branchId.equals(input.branchId)) {
+          throw new ApiError("VALIDATION", "The parent is in a different branch.", {
+            parentId: ["Pick a parent in the same branch"],
+          })
+        }
+        if (!canNest(parent.type, input.type)) {
+          throw new ApiError("VALIDATION", `A ${input.type} can't go inside a ${parent.type}.`, {
+            type: [`A ${input.type} can't go inside a ${parent.type}`],
+          })
+        }
+        ancestors = [...parent.ancestors, parent._id]
+        path = [...parent.path, input.name]
+      }
+
+      // Count tenant-wide locations so branch-scoped admins cannot bypass the plan cap.
+      const totalLocations = await locations
+        .forTenant({ ...ctx, branchScope: "all" })
+        .count({ status: "active" }, { session })
+      await assertWithinLimit(ctx, "locations", totalLocations, session)
+
       const loc = await repo.insertOne(
         {
           branchId: input.branchId,
@@ -106,24 +108,19 @@ export async function createLocation(ctx: TenantContext, raw: z.input<typeof cre
   }
 }
 
-async function loadForWrite(ctx: TenantContext, idRaw: ObjectId | string) {
-  const id = parseInput(objectId, idRaw)
-  const loc = await locations.forTenant(ctx).findById(id)
-  if (!loc || loc.status !== "active") throw new ApiError("NOT_FOUND", "Location not found.")
-  assertCan(ctx, "location:manage", { branchId: loc.branchId })
-  return loc
-}
-
 export async function renameLocation(
   ctx: TenantContext,
   idRaw: ObjectId | string,
   newName: string,
 ) {
-  const loc = await loadForWrite(ctx, idRaw)
+  const id = parseInput(objectId, idRaw)
   const nextName = parseInput(name("location name", 1), newName)
-  const depth = loc.ancestors.length
   return withTransaction(async (session) => {
     const repo = locations.forTenant(ctx)
+    const loc = await repo.findById(id, { session })
+    if (!loc || loc.status !== "active") throw new ApiError("NOT_FOUND", "Location not found.")
+    assertCan(ctx, "location:manage", { branchId: loc.branchId })
+    const depth = loc.ancestors.length
     await repo.updateOne(
       { _id: loc._id },
       { $set: { name: nextName, [`path.${depth}`]: nextName } },
@@ -150,13 +147,24 @@ export async function renameLocation(
 }
 
 export async function archiveLocation(ctx: TenantContext, idRaw: ObjectId | string) {
-  const loc = await loadForWrite(ctx, idRaw)
+  const id = parseInput(objectId, idRaw)
   return withTransaction(async (session) => {
     const repo = locations.forTenant(ctx)
+    const loc = await repo.findById(id, { session })
+    if (!loc || loc.status !== "active") throw new ApiError("NOT_FOUND", "Location not found.")
+    assertCan(ctx, "location:manage", { branchId: loc.branchId })
     if (await repo.count({ parentId: loc._id, status: "active" }, { session })) {
       throw new ApiError("CONFLICT", "Archive or move the locations inside it first.")
     }
     await repo.updateOne({ _id: loc._id }, { $set: { status: "archived" } }, { session })
+    // Revoke any active QR codes attached to the archived location so counts stay accurate.
+    await qrCodes
+      .forTenant(ctx)
+      .updateMany(
+        { locationId: loc._id, status: "active" },
+        { $set: { status: "revoked", revokedAt: new Date() } },
+        { session },
+      )
     await appendAudit(
       ctx,
       {
@@ -175,46 +183,55 @@ export async function moveLocation(
   idRaw: ObjectId | string,
   newParentIdRaw: ObjectId | string | null,
 ) {
-  const loc = await loadForWrite(ctx, idRaw)
+  const id = parseInput(objectId, idRaw)
   const newParentId = newParentIdRaw ? parseInput(objectId, newParentIdRaw) : null
-
-  if (newParentId && newParentId.equals(loc._id)) {
-    throw new ApiError("VALIDATION", "A location can't be moved inside itself.", {
-      parentId: ["Pick a different parent"],
-    })
-  }
-
-  let nextAncestors: ObjectId[] = []
-  let nextPath: string[] = [loc.name]
-
-  if (newParentId) {
-    const parent = await locations.forTenant(ctx).findById(newParentId)
-    if (!parent || parent.status !== "active") {
-      throw new ApiError("NOT_FOUND", "Target parent location not found.")
-    }
-    if (!parent.branchId.equals(loc.branchId)) {
-      throw new ApiError("VALIDATION", "Cannot move a location into a different branch.", {
-        parentId: ["Pick a parent in the same branch"],
-      })
-    }
-    if (parent.ancestors.some((a) => a.equals(loc._id))) {
-      throw new ApiError("VALIDATION", "Cannot move a location inside one of its own children.", {
-        parentId: ["Cannot move into a descendant"],
-      })
-    }
-    if (!canNest(parent.type, loc.type)) {
-      throw new ApiError("VALIDATION", `A ${loc.type} can't go inside a ${parent.type}.`, {
-        parentId: [`A ${loc.type} can't go inside a ${parent.type}`],
-      })
-    }
-    nextAncestors = [...parent.ancestors, parent._id]
-    nextPath = [...parent.path, loc.name]
-  } else if (!canNest(null, loc.type)) {
-    throw new ApiError("VALIDATION", `A ${loc.type} can't sit at the top level.`)
-  }
 
   return withTransaction(async (session) => {
     const repo = locations.forTenant(ctx)
+    const loc = await repo.findById(id, { session })
+    if (!loc || loc.status !== "active") throw new ApiError("NOT_FOUND", "Location not found.")
+    assertCan(ctx, "location:manage", { branchId: loc.branchId })
+
+    if (newParentId && newParentId.equals(loc._id)) {
+      throw new ApiError("VALIDATION", "A location can't be moved inside itself.", {
+        parentId: ["Pick a different parent"],
+      })
+    }
+
+    // Serialise concurrent moves within the same branch to prevent A->B / B->A cycles.
+    await branches
+      .forTenant(ctx)
+      .updateOne({ _id: loc.branchId }, { $set: { updatedAt: new Date() } }, { session })
+
+    let nextAncestors: ObjectId[] = []
+    let nextPath: string[] = [loc.name]
+
+    if (newParentId) {
+      const parent = await repo.findById(newParentId, { session })
+      if (!parent || parent.status !== "active") {
+        throw new ApiError("NOT_FOUND", "Target parent location not found.")
+      }
+      if (!parent.branchId.equals(loc.branchId)) {
+        throw new ApiError("VALIDATION", "Cannot move a location into a different branch.", {
+          parentId: ["Pick a parent in the same branch"],
+        })
+      }
+      if (parent.ancestors.some((a) => a.equals(loc._id))) {
+        throw new ApiError("VALIDATION", "Cannot move a location inside one of its own children.", {
+          parentId: ["Cannot move into a descendant"],
+        })
+      }
+      if (!canNest(parent.type, loc.type)) {
+        throw new ApiError("VALIDATION", `A ${loc.type} can't go inside a ${parent.type}.`, {
+          parentId: [`A ${loc.type} can't go inside a ${parent.type}`],
+        })
+      }
+      nextAncestors = [...parent.ancestors, parent._id]
+      nextPath = [...parent.path, loc.name]
+    } else if (!canNest(null, loc.type)) {
+      throw new ApiError("VALIDATION", `A ${loc.type} can't sit at the top level.`)
+    }
+
     const oldAncestorsLen = loc.ancestors.length
     const oldPathLen = loc.path.length
     const descendants = await repo.find({ ancestors: loc._id, status: "active" }, { session })

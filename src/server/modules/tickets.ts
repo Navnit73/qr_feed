@@ -1,5 +1,5 @@
 import "server-only"
-import type { Filter, ObjectId } from "mongodb"
+import { ObjectId, type Filter } from "mongodb"
 import { z } from "zod"
 import { ApiError } from "@/lib/api/errors"
 import { parseInput } from "@/lib/api/validation"
@@ -12,16 +12,21 @@ import {
 import { appendAudit } from "@/server/audit/audit-log"
 import { nextSequence } from "@/server/db/counters"
 import type { TenantContext } from "@/server/db/tenant-context"
+import { inBranchScope } from "@/server/db/tenant-context"
 import { withTransaction } from "@/server/db/transaction"
 import { pickAssignee } from "@/server/modules/assignment"
-import { notifyUser } from "@/server/modules/notifications"
+import { notifyReporterClosure, notifyUser } from "@/server/modules/notifications"
+import { dispatchWebhookEvent } from "@/server/modules/platform"
 import { computeInitialTicketSla } from "@/server/modules/sla"
-import { assertCan } from "@/server/rbac/ability"
+import { assertWithinLimit, getTenant } from "@/server/modules/tenants"
+import { assertCan, can, resolveAccess } from "@/server/rbac/ability"
 import {
+  attachments,
   categories,
   locations,
   members,
   OPEN_TICKET_STATUSES,
+  roles as rolesRepo,
   savedViews,
   TICKET_STATUSES,
   ticketActivities,
@@ -40,11 +45,13 @@ export type TicketQueryFilters = {
   page?: number
   pageSize?: number
   status?: string
+  excludeStatuses?: TicketStatus[]
   severity?: string
   branchId?: string
   categoryId?: string
   assigneeId?: string
   mine?: boolean
+  sort?: "newest" | "sla_due"
   q?: string
 }
 
@@ -53,11 +60,16 @@ export async function queryTickets(ctx: TenantContext, filters: TicketQueryFilte
   const query: Filter<TicketDoc> = {}
 
   if (filters.status === "open") {
-    query.status = { $in: OPEN_TICKET_STATUSES }
+    const allowed = filters.excludeStatuses?.length
+      ? OPEN_TICKET_STATUSES.filter((s) => !filters.excludeStatuses!.includes(s))
+      : OPEN_TICKET_STATUSES
+    query.status = { $in: allowed }
   } else if (filters.status === "closed_all") {
     query.status = { $in: ["closed", "cancelled"] }
   } else if (filters.status && (TICKET_STATUSES as readonly string[]).includes(filters.status)) {
     query.status = filters.status as TicketStatus
+  } else if (filters.excludeStatuses?.length) {
+    query.status = { $nin: filters.excludeStatuses }
   }
 
   if (filters.severity && (SEVERITIES as readonly string[]).includes(filters.severity)) {
@@ -99,16 +111,68 @@ export async function queryTickets(ctx: TenantContext, filters: TicketQueryFilte
     }
   }
 
+  const sortOrder: Record<string, 1 | -1> =
+    filters.sort === "sla_due" ? { "sla.resolveDueAt": 1, createdAt: -1 } : { createdAt: -1 }
+
   return tickets.forTenant(ctx).paginate(query, {
     page: filters.page ?? 1,
     pageSize: filters.pageSize ?? 25,
-    sort: { createdAt: -1 },
+    sort: sortOrder,
   })
+}
+
+/** Lightweight active-teammate list for assign dropdowns, gated by ticket:assign or ticket:create (not user:read). */
+export async function listAssignableMembers(ctx: TenantContext, branchId?: ObjectId) {
+  if (!can(ctx, "ticket:assign") && !can(ctx, "ticket:create") && !can(ctx, "ticket:read")) {
+    return []
+  }
+  const [allMembers, customRoles] = await Promise.all([
+    members
+      .forTenant({ ...ctx, branchScope: "all" })
+      .find(
+        { status: "active" },
+        { sort: { name: 1 }, projection: { userId: 1, name: 1, roles: 1, branchIds: 1 } },
+      ),
+    rolesRepo.forTenant(ctx).find({}),
+  ])
+  return allMembers
+    .filter((m) => {
+      const access = resolveAccess(m, customRoles)
+      if (branchId) return inBranchScope(access.branchScope, branchId)
+      if (ctx.branchScope === "all") return true
+      return ctx.branchScope.some((bid) => inBranchScope(access.branchScope, bid))
+    })
+    .map((m) => ({ userId: m.userId, name: m.name }))
 }
 
 async function actorName(ctx: TenantContext): Promise<string> {
   const m = await members.forTenant({ ...ctx, branchScope: "all" }).findOne({ userId: ctx.actorId })
   return m?.name ?? "Staff"
+}
+
+async function filterValidAttachments(ctx: TenantContext, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return []
+  const validObjIds = ids
+    .filter((id) => objectId.safeParse(id).success)
+    .map((id) => parseInput(objectId, id))
+  if (validObjIds.length === 0) return []
+  const found = await attachments.forTenant(ctx).find({ _id: { $in: validObjIds } })
+  const allowedSet = new Set(
+    found
+      .filter((a) => !a.branchId || inBranchScope(ctx.branchScope, a.branchId))
+      .map((a) => a._id.toHexString()),
+  )
+  return [...new Set(ids.filter((id) => allowedSet.has(id)))]
+}
+
+async function memberCanAccessBranch(
+  ctx: TenantContext,
+  member: { roles: string[]; branchIds: ObjectId[] },
+  branchId: ObjectId,
+) {
+  const custom = await rolesRepo.forTenant(ctx).find({})
+  const access = resolveAccess(member, custom)
+  return inBranchScope(access.branchScope, branchId)
 }
 
 export async function getTicketDetail(ctx: TenantContext, idRaw: ObjectId | string) {
@@ -117,26 +181,38 @@ export async function getTicketDetail(ctx: TenantContext, idRaw: ObjectId | stri
   const ticket = await tickets.forTenant(ctx).findById(id)
   if (!ticket) throw new ApiError("NOT_FOUND", "Ticket not found.")
 
-  const [comments, activities, category, activeMembers] = await Promise.all([
-    ticketComments.forTenant(ctx).find({ ticketId: ticket._id }, { sort: { createdAt: 1 } }),
-    ticketActivities.forTenant(ctx).find({ ticketId: ticket._id }, { sort: { at: 1, _id: 1 } }),
-    categories.forTenant({ ...ctx, branchScope: "all" }).findById(ticket.categoryId),
-    members
-      .forTenant({ ...ctx, branchScope: "all" })
-      .find({ status: "active" }, { sort: { name: 1 } }),
-  ])
+  const [comments, activities, category, tenant, allMembers, customRoles, repeatCount30d] =
+    await Promise.all([
+      ticketComments.forTenant(ctx).find({ ticketId: ticket._id }, { sort: { createdAt: 1 } }),
+      ticketActivities.forTenant(ctx).find({ ticketId: ticket._id }, { sort: { at: 1, _id: 1 } }),
+      categories.forTenant({ ...ctx, branchScope: "all" }).findById(ticket.categoryId),
+      getTenant(ctx.tenantId),
+      can(ctx, "ticket:assign")
+        ? members
+            .forTenant({ ...ctx, branchScope: "all" })
+            .find(
+              { status: "active" },
+              { sort: { name: 1 }, projection: { userId: 1, name: 1, roles: 1, branchIds: 1 } },
+            )
+        : [],
+      can(ctx, "ticket:assign") ? rolesRepo.forTenant(ctx).find({}) : [],
+      tickets.forTenant(ctx).count({
+        locationId: ticket.locationId,
+        categoryId: ticket.categoryId,
+        createdAt: { $gte: new Date(Date.now() - 30 * 86_400_000) },
+      }),
+    ])
 
-  const repeatCount30d = await tickets.forTenant(ctx).count({
-    locationId: ticket.locationId,
-    categoryId: ticket.categoryId,
-    createdAt: { $gte: new Date(Date.now() - 30 * 86_400_000) },
-  })
+  const activeMembers = allMembers.filter((m) =>
+    inBranchScope(resolveAccess(m, customRoles).branchScope, ticket.branchId),
+  )
 
+  const repeatThreshold = tenant?.settings?.repeatRcaThreshold ?? 3
   const rcaRecommended =
     Boolean(category?.requiresRCA) ||
     ticket.severity === "critical" ||
     (ticket.currentLevel ?? 1) >= 3 ||
-    repeatCount30d >= 3
+    repeatCount30d >= repeatThreshold
 
   return {
     ticket,
@@ -145,6 +221,7 @@ export async function getTicketDetail(ctx: TenantContext, idRaw: ObjectId | stri
     category,
     members: activeMembers,
     repeatCount30d,
+    repeatThreshold,
     rcaRecommended,
   }
 }
@@ -172,34 +249,43 @@ export async function createManualTicket(
   const cat = await categories.forTenant({ ...ctx, branchScope: "all" }).findById(input.categoryId)
   if (!cat) throw new ApiError("NOT_FOUND", "Category not found.")
 
-  let assignee: { userId: string; name: string } | null = null
+  let explicitAssignee: { userId: string; name: string } | null = null
   if (input.assigneeId) {
     const m = await members
       .forTenant({ ...ctx, branchScope: "all" })
       .findOne({ userId: input.assigneeId, status: "active" })
-    if (!m)
-      throw new ApiError("VALIDATION", "Unknown teammate.", {
-        assigneeId: ["Pick an active member"],
+    if (!m || !(await memberCanAccessBranch(ctx, m, loc.branchId))) {
+      throw new ApiError("VALIDATION", "Unknown teammate for this branch.", {
+        assigneeId: ["Pick an active teammate with access to this branch"],
       })
-    assignee = { userId: m.userId, name: m.name }
+    }
+    explicitAssignee = { userId: m.userId, name: m.name }
   }
 
+  const validAttachments = await filterValidAttachments(ctx, input.attachments)
   const nameOfActor = await actorName(ctx)
   const ticket = await withTransaction(async (session) => {
-    if (!assignee) {
-      assignee = await pickAssignee(
+    const now = new Date()
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    const monthlyCount = await tickets
+      .forTenant({ ...ctx, branchScope: "all" })
+      .count({ createdAt: { $gte: monthStart } }, { session })
+    await assertWithinLimit(ctx, "monthlyTickets", monthlyCount, session)
+
+    const assignee =
+      explicitAssignee ??
+      (await pickAssignee(
         ctx,
         {
           branchId: loc.branchId,
           locationId: loc._id,
           categoryId: cat._id,
           severity: input.severity,
+          ancestors: loc.ancestors,
         },
         session,
-      )
-    }
+      ))
 
-    const now = new Date()
     const year = now.getUTCFullYear()
     const seq = await nextSequence(`${ctx.tenantId.toHexString()}:tickets:${year}`, session)
     const number = `TKT-${year}-${String(seq).padStart(6, "0")}`
@@ -228,7 +314,7 @@ export async function createManualTicket(
         trackingTokenHashes: [],
         reportCount: 1,
         lastReportedAt: now,
-        attachments: input.attachments,
+        attachments: validAttachments,
         assignee,
         currentLevel: 1,
         slaPolicyId: initialSla?.slaPolicyId ?? null,
@@ -279,6 +365,16 @@ export async function createManualTicket(
     })
   }
 
+  dispatchWebhookEvent(ctx, "ticket.created", {
+    ticketId: ticket._id.toHexString(),
+    number: ticket.number,
+    source: "manual",
+    category: ticket.categoryName,
+    severity: ticket.severity,
+    location: ticket.locationPath.join(" › "),
+    summary: `${ticket.categoryName} at ${ticket.locationPath.join(" › ")} (${ticket.severity})`,
+  })
+
   return ticket
 }
 
@@ -288,113 +384,26 @@ export async function applyTicketTransition(
   event: TicketEvent & { resolutionAttachments?: string[] },
 ) {
   const id = parseInput(objectId, idRaw)
-  const existing = await tickets.forTenant(ctx).findById(id)
-  if (!existing) throw new ApiError("NOT_FOUND", "Ticket not found.")
-
-  const cat = await categories
-    .forTenant({ ...ctx, branchScope: "all" })
-    .findById(existing.categoryId)
-  const resAttachments = event.resolutionAttachments ?? []
-  const machineEvent: TicketEvent =
-    event.type === "submit"
-      ? {
-          ...event,
-          attachmentCount: resAttachments.length + (existing.resolutionAttachments?.length ?? 0),
-        }
-      : event
-
-  const check = transitionTicket(
-    {
-      status: existing.status,
-      assigneeId: existing.assignee?.userId ?? null,
-      requiresResolutionEvidence: Boolean(cat?.requiresResolutionEvidence),
-    },
-    machineEvent,
-    { userId: ctx.actorId, permissions: ctx.permissions },
-  )
-
-  if (!check.ok) {
-    throw new ApiError(
-      check.code,
-      check.message,
-      check.field ? { [check.field]: [check.message] } : undefined,
-    )
+  if ("note" in event && typeof event.note === "string" && event.note.length > 2000) {
+    throw new ApiError("VALIDATION", "Keep remarks under 2000 characters.", {
+      note: ["Keep remarks under 2000 characters"],
+    })
+  }
+  if ("reason" in event && typeof event.reason === "string" && event.reason.length > 1000) {
+    throw new ApiError("VALIDATION", "Keep reasons under 1000 characters.", {
+      reason: ["Keep reasons under 1000 characters"],
+    })
+  }
+  if (
+    "duplicateOf" in event &&
+    typeof event.duplicateOf === "string" &&
+    event.duplicateOf.length > 80
+  ) {
+    throw new ApiError("VALIDATION", "Duplicate ticket number is too long.")
   }
 
-  let nextAssignee = existing.assignee ?? null
-  if (event.type === "assign") {
-    const target = await members
-      .forTenant({ ...ctx, branchScope: "all" })
-      .findOne({ userId: event.assigneeId, status: "active" })
-    if (!target) {
-      throw new ApiError("VALIDATION", "Selected teammate is not active.", {
-        assigneeId: ["Pick an active teammate"],
-      })
-    }
-    nextAssignee = { userId: target.userId, name: target.name }
-  } else if (check.clearAssignee) {
-    nextAssignee = null
-  } else if (event.type === "accept" && !nextAssignee) {
-    nextAssignee = { userId: ctx.actorId, name: await actorName(ctx) }
-  }
-
-  const now = new Date()
+  const resAttachments = await filterValidAttachments(ctx, event.resolutionAttachments ?? [])
   const whoName = await actorName(ctx)
-  const $set: Record<string, unknown> = {
-    status: check.nextStatus,
-    assignee: nextAssignee,
-  }
-  const $inc: Record<string, number> = {}
-
-  if (check.incrementReopen) $inc.reopenCount = 1
-  if (event.type === "submit") {
-    $set.resolutionNote = event.note?.trim() ?? ""
-    $set.submittedForVerificationAt = now
-    if (resAttachments.length > 0) {
-      $set.resolutionAttachments = [...(existing.resolutionAttachments ?? []), ...resAttachments]
-    }
-  }
-  if (check.nextStatus === "closed") {
-    $set.closedAt = now
-  }
-  if (event.type === "cancel" && event.duplicateOf) {
-    $set.duplicateOf = event.duplicateOf.trim()
-  }
-
-  // Handle SLA timestamps & pause/resume clock cleanly
-  if (existing.sla) {
-    const nextSla = { ...existing.sla }
-    if (check.markAccepted && !nextSla.acceptedAt) {
-      nextSla.acceptedAt = now
-    }
-    if (check.markResolved) {
-      nextSla.resolvedAt = now
-    }
-    if (check.pauseSla && !nextSla.pausedAt) {
-      nextSla.pausedAt = now
-    }
-    if (check.resumeSla && nextSla.pausedAt) {
-      const delta = Math.max(0, now.getTime() - new Date(nextSla.pausedAt).getTime())
-      nextSla.pausedMs = (nextSla.pausedMs ?? 0) + delta
-      nextSla.resolveDueAt = new Date(new Date(nextSla.resolveDueAt).getTime() + delta)
-      if (!nextSla.acceptedAt) {
-        nextSla.acceptDueAt = new Date(new Date(nextSla.acceptDueAt).getTime() + delta)
-      }
-      nextSla.pausedAt = null
-    }
-    if (check.incrementReopen) {
-      // Restart SLA resolution clock on reopen (+2 hours minimum grace or original window)
-      const graceMs = 2 * 60 * 60 * 1000
-      nextSla.resolvedAt = null
-      nextSla.pausedAt = null
-      if (new Date(nextSla.resolveDueAt).getTime() < now.getTime() + graceMs) {
-        nextSla.resolveDueAt = new Date(now.getTime() + graceMs)
-      }
-      nextSla.breached = false
-    }
-    $set.sla = nextSla
-  }
-
   const note =
     "reason" in event && event.reason
       ? event.reason.trim()
@@ -402,15 +411,127 @@ export async function applyTicketTransition(
         ? event.note.trim()
         : undefined
 
-  const updated = await withTransaction(async (session) => {
+  const txResult = await withTransaction(async (session) => {
+    const existing = await tickets.forTenant(ctx).findById(id, { session })
+    if (!existing) throw new ApiError("NOT_FOUND", "Ticket not found.")
+
+    const cat = await categories
+      .forTenant({ ...ctx, branchScope: "all" })
+      .findById(existing.categoryId, { session })
+    const machineEvent: TicketEvent =
+      event.type === "submit"
+        ? {
+            ...event,
+            attachmentCount: resAttachments.length + (existing.resolutionAttachments?.length ?? 0),
+          }
+        : event
+
+    const check = transitionTicket(
+      {
+        status: existing.status,
+        assigneeId: existing.assignee?.userId ?? null,
+        requiresResolutionEvidence: Boolean(cat?.requiresResolutionEvidence),
+      },
+      machineEvent,
+      { userId: ctx.actorId, permissions: ctx.permissions },
+    )
+
+    if (!check.ok) {
+      throw new ApiError(
+        check.code,
+        check.message,
+        check.field ? { [check.field]: [check.message] } : undefined,
+      )
+    }
+
+    let nextAssignee = existing.assignee ?? null
+    if (event.type === "assign") {
+      const target = await members
+        .forTenant({ ...ctx, branchScope: "all" })
+        .findOne({ userId: event.assigneeId, status: "active" }, { session })
+      if (!target || !(await memberCanAccessBranch(ctx, target, existing.branchId))) {
+        throw new ApiError("VALIDATION", "Selected teammate is not active in this branch.", {
+          assigneeId: ["Pick an active teammate with access to this branch"],
+        })
+      }
+      nextAssignee = { userId: target.userId, name: target.name }
+    } else if (check.clearAssignee) {
+      nextAssignee = null
+    } else if (event.type === "accept" && !nextAssignee) {
+      nextAssignee = { userId: ctx.actorId, name: whoName }
+    }
+
+    const now = new Date()
+    const $set: Record<string, unknown> = {
+      status: check.nextStatus,
+      assignee: nextAssignee,
+    }
+    const $inc: Record<string, number> = {}
+
+    if (check.incrementReopen) $inc.reopenCount = 1
+    if (event.type === "submit") {
+      $set.resolutionNote = event.note?.trim() ?? ""
+      $set.submittedForVerificationAt = now
+      if (resAttachments.length > 0) {
+        $set.resolutionAttachments = [
+          ...new Set([...(existing.resolutionAttachments ?? []), ...resAttachments]),
+        ]
+      }
+    }
+    if (check.nextStatus === "closed") {
+      $set.closedAt = now
+    }
+    if (event.type === "cancel" && event.duplicateOf) {
+      $set.duplicateOf = event.duplicateOf.trim()
+    }
+
+    // Handle SLA timestamps & pause/resume clock cleanly
+    if (existing.sla) {
+      const nextSla = { ...existing.sla }
+      if (check.markAccepted && !nextSla.acceptedAt) {
+        nextSla.acceptedAt = now
+      }
+      if (check.markResolved) {
+        nextSla.resolvedAt = now
+      }
+      if (check.pauseSla && !nextSla.pausedAt) {
+        nextSla.pausedAt = now
+      }
+      if (check.resumeSla && nextSla.pausedAt) {
+        const delta = Math.max(0, now.getTime() - new Date(nextSla.pausedAt).getTime())
+        nextSla.pausedMs = (nextSla.pausedMs ?? 0) + delta
+        nextSla.resolveDueAt = new Date(new Date(nextSla.resolveDueAt).getTime() + delta)
+        if (!nextSla.acceptedAt) {
+          nextSla.acceptDueAt = new Date(new Date(nextSla.acceptDueAt).getTime() + delta)
+        }
+        nextSla.pausedAt = null
+      }
+      if (check.incrementReopen) {
+        // Restart SLA resolution clock on reopen (+2 hours minimum grace or original window)
+        const graceMs = 2 * 60 * 60 * 1000
+        nextSla.resolvedAt = null
+        nextSla.pausedAt = null
+        nextSla.warnedAt = null
+        nextSla.levelStartedAt = now
+        if (new Date(nextSla.resolveDueAt).getTime() < now.getTime() + graceMs) {
+          nextSla.resolveDueAt = new Date(now.getTime() + graceMs)
+        }
+        nextSla.breached = false
+      }
+      $set.sla = nextSla
+    }
+
     const doc = await tickets.forTenant(ctx).updateOne(
-      { _id: existing._id },
+      { _id: existing._id, status: existing.status },
       {
         $set,
         ...(Object.keys($inc).length ? { $inc } : {}),
       },
       { session },
     )
+    if (!doc) {
+      throw new ApiError("CONFLICT", "This ticket was updated by someone else. Please refresh.")
+    }
 
     await ticketActivities.forTenant(ctx).insertOne(
       {
@@ -443,8 +564,10 @@ export async function applyTicketTransition(
       { session },
     )
 
-    return doc!
+    return { doc, existing, check, nextAssignee }
   })
+
+  const { doc: updated, existing, check, nextAssignee } = txResult
 
   // Send targeted notifications outside transaction
   if (event.type === "assign" && nextAssignee && nextAssignee.userId !== ctx.actorId) {
@@ -470,12 +593,20 @@ export async function applyTicketTransition(
       href: `/tickets/${existing._id.toHexString()}`,
     })
   } else if (check.nextStatus === "pending_verification") {
-    // Notify verifiers / org admins in the tenant
-    const verifiers = await members
-      .forTenant({ ...ctx, branchScope: "all" })
-      .find({ status: "active", roles: { $in: ["verifier", "org_admin", "branch_admin"] } })
+    // Notify only verifiers / admins who actually have branch access to this ticket
+    const [allActive, customRoles] = await Promise.all([
+      members.forTenant({ ...ctx, branchScope: "all" }).find({ status: "active" }),
+      rolesRepo.forTenant(ctx).find({}),
+    ])
+    const verifiers = allActive.filter((m) => {
+      if (m.userId === ctx.actorId) return false
+      const access = resolveAccess(m, customRoles)
+      return (
+        (access.permissions.has("ticket:verify") || access.permissions.has("ticket:close")) &&
+        inBranchScope(access.branchScope, existing.branchId)
+      )
+    })
     for (const v of verifiers.slice(0, 5)) {
-      if (v.userId === ctx.actorId) continue
       await notifyUser(ctx, {
         userId: v.userId,
         type: "ticket.submitted",
@@ -484,9 +615,132 @@ export async function applyTicketTransition(
         href: `/tickets/${existing._id.toHexString()}`,
       })
     }
+  } else if (
+    check.nextStatus === "closed" &&
+    (existing.reporter.email || existing.reporter.phone)
+  ) {
+    const tenant = await getTenant(ctx.tenantId)
+    await notifyReporterClosure({
+      tenantName: tenant?.name ?? "QR Feed",
+      ticketNumber: existing.number,
+      locationName: existing.locationPath.at(-1) ?? "",
+      categoryName: existing.categoryName,
+      resolutionNote: updated.resolutionNote,
+      email: existing.reporter.email,
+      phone: existing.reporter.phone,
+    })
   }
 
+  dispatchWebhookEvent(ctx, check.nextStatus === "closed" ? "ticket.closed" : "ticket.updated", {
+    ticketId: existing._id.toHexString(),
+    number: existing.number,
+    beforeStatus: existing.status,
+    status: check.nextStatus,
+    assignee: nextAssignee?.name ?? null,
+    summary: `${existing.number} moved ${existing.status} → ${check.nextStatus}`,
+  })
+
   return updated
+}
+
+/**
+ * Merges a duplicate ticket into a target ticket in a single transaction (phase.md §6.1):
+ * transfers reportCount, trackingTokenHashes, and attachments to the target and marks source cancelled.
+ */
+export async function mergeTicket(
+  ctx: TenantContext,
+  sourceIdRaw: ObjectId | string,
+  targetNumberOrId: string,
+  reason = "Merged duplicate ticket",
+) {
+  assertCan(ctx, "ticket:close")
+  const sourceId = parseInput(objectId, sourceIdRaw)
+  const targetRef = targetNumberOrId.trim()
+  if (!targetRef) {
+    throw new ApiError("VALIDATION", "Enter the target ticket number.", {
+      target: ["Enter the target ticket number (e.g. TKT-2026-000001)"],
+    })
+  }
+  const whoName = await actorName(ctx)
+
+  return withTransaction(async (session) => {
+    const repo = tickets.forTenant(ctx)
+    const source = await repo.findById(sourceId, { session })
+    if (!source) throw new ApiError("NOT_FOUND", "Source ticket not found.")
+    if (source.status === "closed" || source.status === "cancelled") {
+      throw new ApiError("CONFLICT", "Only open tickets can be merged.")
+    }
+
+    const target = ObjectId.isValid(targetRef)
+      ? await repo.findById(targetRef, { session })
+      : await repo.findOne({ number: targetRef.toUpperCase() }, { session })
+    if (!target) {
+      throw new ApiError("NOT_FOUND", `Target ticket "${targetRef}" was not found.`, {
+        target: ["Ticket number not found in your scope"],
+      })
+    }
+    if (target._id.equals(source._id)) {
+      throw new ApiError("VALIDATION", "Cannot merge a ticket into itself.")
+    }
+
+    const now = new Date()
+    await repo.updateOne(
+      { _id: target._id },
+      {
+        $inc: { reportCount: source.reportCount },
+        $addToSet: {
+          trackingTokenHashes: { $each: source.trackingTokenHashes },
+          attachments: { $each: source.attachments ?? [] },
+        },
+        $set: { lastReportedAt: now },
+      },
+      { session },
+    )
+    const cancelled = await repo.updateOne(
+      { _id: source._id, status: source.status },
+      { $set: { status: "cancelled", duplicateOf: target.number } },
+      { session },
+    )
+    if (!cancelled) throw new ApiError("CONFLICT", "Ticket was modified concurrently.")
+
+    await ticketActivities.forTenant(ctx).insertOne(
+      {
+        branchId: source.branchId,
+        ticketId: source._id,
+        type: "ticket.merged",
+        actorId: ctx.actorId,
+        actorName: whoName,
+        at: now,
+        before: { status: source.status },
+        after: { status: "cancelled", duplicateOf: target.number },
+        note: `${reason} (merged into ${target.number})`,
+      },
+      { session },
+    )
+    await ticketActivities.forTenant(ctx).insertOne(
+      {
+        branchId: target.branchId,
+        ticketId: target._id,
+        type: "ticket.merged_in",
+        actorId: ctx.actorId,
+        actorName: whoName,
+        at: now,
+        note: `Merged duplicate ${source.number} (+${source.reportCount} report${source.reportCount === 1 ? "" : "s"})`,
+      },
+      { session },
+    )
+    await appendAudit(
+      ctx,
+      {
+        action: "ticket.merged",
+        entity: "ticket",
+        entityId: source._id,
+        after: { sourceNumber: source.number, targetNumber: target.number },
+      },
+      { session },
+    )
+    return { source: cancelled, target }
+  })
 }
 
 const commentSchema = z.object({
@@ -504,9 +758,15 @@ export async function addTicketComment(
   const ticketId = parseInput(objectId, ticketIdRaw)
   const ticket = await tickets.forTenant(ctx).findById(ticketId)
   if (!ticket) throw new ApiError("NOT_FOUND", "Ticket not found.")
-  assertCan(ctx, "ticket:work", { branchId: ticket.branchId })
+  if (
+    !can(ctx, "ticket:work", { branchId: ticket.branchId }) &&
+    !can(ctx, "ticket:verify", { branchId: ticket.branchId })
+  ) {
+    throw new ApiError("FORBIDDEN", "You don't have permission to post remarks on this ticket.")
+  }
 
   const input = parseInput(commentSchema, raw)
+  const validAttachments = await filterValidAttachments(ctx, input.attachments)
   const whoName = await actorName(ctx)
   const now = new Date()
 
@@ -519,7 +779,7 @@ export async function addTicketComment(
         authorName: whoName,
         body: input.body,
         visibility: input.visibility,
-        attachments: input.attachments,
+        attachments: validAttachments,
       },
       { session },
     )
@@ -532,7 +792,7 @@ export async function addTicketComment(
         actorName: whoName,
         at: now,
         note: input.body,
-        meta: { visibility: input.visibility, attachments: input.attachments.length },
+        meta: { visibility: input.visibility, attachments: validAttachments.length },
       },
       { session },
     )
@@ -560,8 +820,15 @@ export async function updateTicketTags(
   const ticketId = parseInput(objectId, ticketIdRaw)
   const ticket = await tickets.forTenant(ctx).findById(ticketId)
   if (!ticket) throw new ApiError("NOT_FOUND", "Ticket not found.")
-  assertCan(ctx, "ticket:work", { branchId: ticket.branchId })
-  const tags = [...new Set(rawTags.map((t) => t.trim().toLowerCase()).filter(Boolean))].slice(0, 10)
+  if (
+    !can(ctx, "ticket:work", { branchId: ticket.branchId }) &&
+    !can(ctx, "ticket:verify", { branchId: ticket.branchId })
+  ) {
+    throw new ApiError("FORBIDDEN", "You don't have permission to post remarks on this ticket.")
+  }
+  const tags = [
+    ...new Set(rawTags.map((t) => t.trim().toLowerCase().slice(0, 30)).filter(Boolean)),
+  ].slice(0, 10)
   return withTransaction(async (session) => {
     const updated = await tickets
       .forTenant(ctx)
@@ -644,9 +911,11 @@ export async function createSavedView(ctx: TenantContext, raw: z.input<typeof sa
 export async function deleteSavedView(ctx: TenantContext, idRaw: ObjectId | string) {
   assertCan(ctx, "ticket:read")
   const id = parseInput(objectId, idRaw)
-  const ok = await savedViews
-    .forTenant(ctx)
-    .deleteOne({ _id: id, $or: [{ ownerId: ctx.actorId }, { shared: true }] })
+  const canDeleteShared = can(ctx, "settings:manage") || can(ctx, "tenant:manage")
+  const filter = canDeleteShared
+    ? { _id: id, $or: [{ ownerId: ctx.actorId }, { shared: true }] }
+    : { _id: id, ownerId: ctx.actorId }
+  const ok = await savedViews.forTenant(ctx).deleteOne(filter)
   if (!ok) throw new ApiError("NOT_FOUND", "Saved view not found.")
 }
 

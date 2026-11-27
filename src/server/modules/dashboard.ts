@@ -1,12 +1,9 @@
 import "server-only"
-import {
-  average,
-  dailyCounts,
-  percentChange,
-  severityBreakdown,
-  topLocations,
-} from "@/lib/dashboard-metrics"
+import { ObjectId } from "mongodb"
+import { dailyCounts, percentChange } from "@/lib/dashboard-metrics"
+import { SEVERITIES, type Severity } from "@/lib/feedback-presets"
 import type { TenantContext } from "@/server/db/tenant-context"
+import { inBranchScope } from "@/server/db/tenant-context"
 import { getTenant } from "@/server/modules/tenants"
 import { can } from "@/server/rbac/ability"
 import {
@@ -19,27 +16,62 @@ import {
 } from "@/server/repositories"
 
 const DAY_MS = 86_400_000
-const TREND_DAYS = 14
-// Enough for a busy month; past this the dashboard needs pre-aggregated stats (P4 reports).
-const SCAN_LIMIT = 5000
+
+export type DashboardFilters = {
+  branchId?: string
+  days?: number
+}
 
 /**
- * Everything the dashboard shows. Each area is null when the viewer can't see it, and the
- * repositories already narrow tickets to the viewer's branches.
+ * Everything the dashboard shows. Uses MongoDB $facet aggregation + narrow projections
+ * instead of scanning 10,000 full documents into Node memory, keeping dashboard loads fast at scale.
  */
-export async function getDashboard(ctx: TenantContext) {
+export async function getDashboard(ctx: TenantContext, filters: DashboardFilters = {}) {
+  const days = filters.days && [7, 14, 30, 90].includes(filters.days) ? filters.days : 14
+  const branchObjId =
+    filters.branchId &&
+    ObjectId.isValid(filters.branchId) &&
+    inBranchScope(ctx.branchScope, new ObjectId(filters.branchId))
+      ? new ObjectId(filters.branchId)
+      : undefined
+
   const [tenant, branchList, locationCount, memberCount, qrCount, ticketData] = await Promise.all([
     getTenant(ctx.tenantId),
     can(ctx, "branch:read")
-      ? branches.forTenant(ctx).find({ status: "active" }, { sort: { createdAt: 1 } })
+      ? branches
+          .forTenant(ctx)
+          .find({ status: "active" }, { sort: { name: 1 }, projection: { name: 1, timezone: 1 } })
       : null,
-    can(ctx, "location:read") ? locations.forTenant(ctx).count({ status: "active" }) : null,
-    can(ctx, "user:read") ? members.forTenant(ctx).count({ status: "active" }) : null,
-    can(ctx, "qr:read") ? qrCodes.forTenant(ctx).count({ status: "active" }) : null,
-    can(ctx, "ticket:read") ? ticketSummary(ctx) : null,
+    can(ctx, "location:read")
+      ? locations
+          .forTenant(ctx)
+          .count({ status: "active", ...(branchObjId ? { branchId: branchObjId } : {}) })
+      : null,
+    can(ctx, "user:read")
+      ? members
+          .forTenant(ctx)
+          .count(
+            branchObjId
+              ? { status: "active", branchIds: branchObjId }
+              : ctx.branchScope === "all"
+                ? { status: "active" }
+                : { status: "active", branchIds: { $in: ctx.branchScope } },
+          )
+      : null,
+    can(ctx, "qr:read")
+      ? qrCodes
+          .forTenant(ctx)
+          .count({ status: "active", ...(branchObjId ? { branchId: branchObjId } : {}) })
+      : null,
+    can(ctx, "ticket:read") ? ticketSummary(ctx, { branchObjId, days }) : null,
   ])
 
   return {
+    filters: {
+      branchId: branchObjId?.toHexString() ?? "",
+      days,
+    },
+    branches: (branchList ?? []).map((b) => ({ id: b._id.toHexString(), name: b.name })),
     workspace: {
       name: tenant?.name ?? "",
       plan: tenant?.plan ?? "trial",
@@ -55,48 +87,385 @@ export async function getDashboard(ctx: TenantContext) {
 
 export type Dashboard = Awaited<ReturnType<typeof getDashboard>>
 
-async function ticketSummary(ctx: TenantContext) {
+async function ticketSummary(
+  ctx: TenantContext,
+  { branchObjId, days }: { branchObjId?: ObjectId; days: number },
+) {
   const repo = tickets.forTenant(ctx)
   const now = new Date()
-  const since = (days: number) => new Date(now.getTime() - days * DAY_MS)
+  const since = (d: number) => new Date(now.getTime() - d * DAY_MS)
+  const ratingWindowDays = Math.max(30, days)
+  const maxWindowStart = since(Math.max(days * 2, ratingWindowDays * 2))
+  const weekStart = since(7)
+  const prevWeekStart = since(14)
+  const rangeStart = since(days)
+  const prevRangeStart = since(days * 2)
+  const monthStart = since(30)
+  const prevMonthStart = since(60)
 
-  const [open, recentWindow, firstBranch] = await Promise.all([
-    repo.find({ status: { $in: OPEN_TICKET_STATUSES } }, { limit: SCAN_LIMIT }),
-    // 60 days covers this month and last month for the rating comparison.
-    repo.find({ createdAt: { $gte: since(60) } }, { sort: { createdAt: -1 }, limit: SCAN_LIMIT }),
-    branches.forTenant(ctx).findOne({ status: "active" }, { sort: { createdAt: 1 } }),
+  const branchMatch = branchObjId ? { branchId: branchObjId } : {}
+
+  const [facetRows, recentDocs, firstBranch] = await Promise.all([
+    repo.aggregate<{
+      openSummary: {
+        open: number
+        highPriorityOpen: number
+        newOpen: number
+        overdueOpen: number
+      }[]
+      bySeverity: { _id: Severity; count: number }[]
+      periodCounts: {
+        thisWeek: number
+        lastWeek: number
+        inRange: number
+        prevRange: number
+        thisMonthRatingSum: number
+        thisMonthRatingCount: number
+        prevMonthRatingSum: number
+        prevMonthRatingCount: number
+        slaTotal: number
+        slaBreached: number
+        mttrSumMs: number
+        mttrCount: number
+      }[]
+      trendDates: { createdAt: Date }[]
+      topLocations: {
+        _id: { name: string; parent: string }
+        count: number
+      }[]
+    }>([
+      ...(branchObjId ? [{ $match: branchMatch }] : []),
+      {
+        $facet: {
+          openSummary: [
+            { $match: { status: { $in: OPEN_TICKET_STATUSES } } },
+            {
+              $group: {
+                _id: null,
+                open: { $sum: 1 },
+                highPriorityOpen: {
+                  $sum: { $cond: [{ $in: ["$severity", ["high", "critical"]] }, 1, 0] },
+                },
+                newOpen: { $sum: { $cond: [{ $eq: ["$status", "new"] }, 1, 0] } },
+                overdueOpen: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $or: [
+                          { $eq: ["$sla.breached", true] },
+                          {
+                            $and: [
+                              { $ne: ["$sla.resolveDueAt", null] },
+                              { $eq: ["$sla.pausedAt", null] },
+                              { $lt: ["$sla.resolveDueAt", now] },
+                            ],
+                          },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+          bySeverity: [
+            { $match: { status: { $in: OPEN_TICKET_STATUSES } } },
+            { $group: { _id: "$severity", count: { $sum: 1 } } },
+          ],
+          periodCounts: [
+            { $match: { createdAt: { $gte: maxWindowStart } } },
+            {
+              $group: {
+                _id: null,
+                thisWeek: { $sum: { $cond: [{ $gte: ["$createdAt", weekStart] }, 1, 0] } },
+                lastWeek: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", prevWeekStart] },
+                          { $lt: ["$createdAt", weekStart] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                inRange: { $sum: { $cond: [{ $gte: ["$createdAt", rangeStart] }, 1, 0] } },
+                prevRange: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", prevRangeStart] },
+                          { $lt: ["$createdAt", rangeStart] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                thisMonthRatingSum: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [{ $gte: ["$createdAt", monthStart] }, { $ne: ["$rating", null] }],
+                      },
+                      "$rating",
+                      0,
+                    ],
+                  },
+                },
+                thisMonthRatingCount: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [{ $gte: ["$createdAt", monthStart] }, { $ne: ["$rating", null] }],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                prevMonthRatingSum: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", prevMonthStart] },
+                          { $lt: ["$createdAt", monthStart] },
+                          { $ne: ["$rating", null] },
+                        ],
+                      },
+                      "$rating",
+                      0,
+                    ],
+                  },
+                },
+                prevMonthRatingCount: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", prevMonthStart] },
+                          { $lt: ["$createdAt", monthStart] },
+                          { $ne: ["$rating", null] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                slaTotal: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", rangeStart] },
+                          { $ne: ["$sla.resolveDueAt", null] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                slaBreached: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", rangeStart] },
+                          { $eq: ["$sla.breached", true] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                mttrSumMs: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", rangeStart] },
+                          { $eq: ["$status", "closed"] },
+                        ],
+                      },
+                      {
+                        $max: [
+                          0,
+                          {
+                            $subtract: [
+                              {
+                                $subtract: [
+                                  {
+                                    $ifNull: [
+                                      "$closedAt",
+                                      { $ifNull: ["$sla.resolvedAt", "$updatedAt"] },
+                                    ],
+                                  },
+                                  "$createdAt",
+                                ],
+                              },
+                              { $ifNull: ["$sla.pausedMs", 0] },
+                            ],
+                          },
+                        ],
+                      },
+                      0,
+                    ],
+                  },
+                },
+                mttrCount: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$createdAt", rangeStart] },
+                          { $eq: ["$status", "closed"] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+          trendDates: [
+            { $match: { createdAt: { $gte: rangeStart } } },
+            { $project: { _id: 0, createdAt: 1 } },
+          ],
+          topLocations: [
+            { $match: { createdAt: { $gte: monthStart } } },
+            {
+              $group: {
+                _id: {
+                  name: { $ifNull: [{ $arrayElemAt: ["$locationPath", -1] }, ""] },
+                  parent: {
+                    $reduce: {
+                      input: {
+                        $slice: [
+                          "$locationPath",
+                          { $max: [0, { $subtract: [{ $size: "$locationPath" }, 1] }] },
+                        ],
+                      },
+                      initialValue: "",
+                      in: {
+                        $cond: [
+                          { $eq: ["$$value", ""] },
+                          "$$this",
+                          { $concat: ["$$value", " › ", "$$this"] },
+                        ],
+                      },
+                    },
+                  },
+                },
+                count: { $sum: "$reportCount" },
+              },
+            },
+            { $sort: { count: -1 } },
+            { $limit: 5 },
+          ],
+        },
+      },
+    ]),
+    repo.find(branchMatch, {
+      sort: { createdAt: -1 },
+      limit: 6,
+      projection: {
+        number: 1,
+        categoryName: 1,
+        description: 1,
+        locationPath: 1,
+        severity: 1,
+        status: 1,
+        rating: 1,
+        reportCount: 1,
+        createdAt: 1,
+      },
+    }),
+    branches
+      .forTenant(ctx)
+      .findOne(branchObjId ? { _id: branchObjId, status: "active" } : { status: "active" }, {
+        sort: { createdAt: 1 },
+        projection: { timezone: 1 },
+      }),
   ])
 
-  const between = (from: number, to: number) =>
-    recentWindow.filter((t) => t.createdAt >= since(from) && t.createdAt < since(to))
-  const thisWeek = between(7, 0)
-  const lastWeek = between(14, 7)
-  const thisMonth = between(30, 0)
-  const lastMonth = between(60, 30)
+  const facet = facetRows[0]
+  const os = facet?.openSummary[0] ?? { open: 0, highPriorityOpen: 0, newOpen: 0, overdueOpen: 0 }
+  const pc = facet?.periodCounts[0] ?? {
+    thisWeek: 0,
+    lastWeek: 0,
+    inRange: 0,
+    prevRange: 0,
+    thisMonthRatingSum: 0,
+    thisMonthRatingCount: 0,
+    prevMonthRatingSum: 0,
+    prevMonthRatingCount: 0,
+    slaTotal: 0,
+    slaBreached: 0,
+    mttrSumMs: 0,
+    mttrCount: 0,
+  }
 
-  const avgRating = average(thisMonth.map((t) => t.rating))
-  const prevRating = average(lastMonth.map((t) => t.rating))
+  const avgRating =
+    pc.thisMonthRatingCount > 0
+      ? Math.round((pc.thisMonthRatingSum / pc.thisMonthRatingCount) * 10) / 10
+      : null
+  const prevRating =
+    pc.prevMonthRatingCount > 0
+      ? Math.round((pc.prevMonthRatingSum / pc.prevMonthRatingCount) * 10) / 10
+      : null
+  const slaCompliancePct =
+    pc.slaTotal > 0 ? Math.round(((pc.slaTotal - pc.slaBreached) / pc.slaTotal) * 100) : null
+  const mttrHours =
+    pc.mttrCount > 0 ? Math.round((pc.mttrSumMs / pc.mttrCount / 3_600_000) * 10) / 10 : null
+
+  const sevMap = new Map((facet?.bySeverity ?? []).map((s) => [s._id, s.count]))
+  const bySeverity = [...SEVERITIES].reverse().map((severity) => ({
+    severity,
+    count: sevMap.get(severity) ?? 0,
+  }))
 
   return {
-    open: open.length,
-    highPriorityOpen: open.filter((t) => t.severity === "high" || t.severity === "critical").length,
-    newOpen: open.filter((t) => t.status === "new").length,
-    newThisWeek: thisWeek.length,
-    newThisWeekDelta: percentChange(thisWeek.length, lastWeek.length),
+    open: os.open,
+    highPriorityOpen: os.highPriorityOpen,
+    newOpen: os.newOpen,
+    overdueOpen: os.overdueOpen,
+    slaCompliancePct,
+    mttrHours,
+    newThisWeek: pc.thisWeek,
+    newThisWeekDelta: percentChange(pc.thisWeek, pc.lastWeek),
+    newInRange: pc.inRange,
+    newInRangeDelta: percentChange(pc.inRange, pc.prevRange),
     avgRating,
     avgRatingDelta:
       avgRating !== null && prevRating !== null ? percentChange(avgRating, prevRating) : undefined,
-    ratedThisMonth: thisMonth.filter((t) => t.rating !== null).length,
+    ratedThisMonth: pc.thisMonthRatingCount,
     trend: dailyCounts(
-      between(TREND_DAYS, 0).map((t) => t.createdAt),
+      (facet?.trendDates ?? []).map((d) => d.createdAt),
       now,
-      TREND_DAYS,
+      days,
       firstBranch?.timezone ?? "UTC",
     ),
-    bySeverity: severityBreakdown(open.map((t) => t.severity)),
-    topLocations: topLocations(thisMonth, 5),
+    bySeverity,
+    topLocations: (facet?.topLocations ?? []).map((row) => ({
+      name: row._id.name,
+      parent: row._id.parent,
+      count: row.count,
+    })),
     // Plain data only: this crosses into client components.
-    recent: recentWindow.slice(0, 6).map((t) => ({
+    recent: recentDocs.map((t) => ({
       id: t._id.toHexString(),
       number: t.number,
       category: t.categoryName,

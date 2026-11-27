@@ -144,4 +144,75 @@ describe("SLA & escalation engine (F-4.1–F-4.7 / T-SLA-2)", () => {
     const events = await listEscalationEvents(ctx, afterL3._id)
     expect(events.map((e) => `${e.fromLevel}->${e.toLevel}`)).toEqual(["1->2", "2->3"])
   })
+
+  it("scopes manual SLA sweeps to the requested tenantId without affecting other tenants", async () => {
+    const orgA = await createOrganization(
+      { id: "admin-a", email: "a@sla.test", name: "Admin A" },
+      { orgName: "Org A", industry: "hotel", branchName: "A1", timezone: "UTC" },
+    )
+    const orgB = await createOrganization(
+      { id: "admin-b", email: "b@sla.test", name: "Admin B" },
+      { orgName: "Org B", industry: "hotel", branchName: "B1", timezone: "UTC" },
+    )
+    const ctxA = (await resolveTenantContext("admin-a", orgA.tenant._id))!
+    const ctxB = (await resolveTenantContext("admin-b", orgB.tenant._id))!
+
+    for (const [ctx, branch] of [
+      [ctxA, orgA.branch],
+      [ctxB, orgB.branch],
+    ] as const) {
+      await createSlaPolicy(ctx, {
+        name: "Fast SLA",
+        businessHoursMode: "24x7",
+        appliesTo: {},
+        levels: [
+          {
+            level: 1,
+            acceptWithinMin: 10,
+            resolveWithinMin: 30,
+            escalateAfterMin: 30,
+            targetRole: "org_admin",
+            action: "notify",
+          },
+          {
+            level: 2,
+            acceptWithinMin: 15,
+            resolveWithinMin: 60,
+            escalateAfterMin: 60,
+            targetRole: "org_admin",
+            action: "notify",
+          },
+          {
+            level: 3,
+            acceptWithinMin: 30,
+            resolveWithinMin: 120,
+            escalateAfterMin: 120,
+            targetRole: "org_admin",
+            action: "notify",
+          },
+        ],
+      })
+      const loc = await createLocation(ctx, {
+        branchId: branch._id,
+        type: "location",
+        name: "Lobby",
+      })
+      const qr = await createQrCode(ctx, loc._id)
+      const cats = await listCategories(ctx, "hotel")
+      await submitFeedback(
+        qr.shortCode,
+        { categoryId: cats[0]._id.toHexString(), description: "Issue", consent: "on" },
+        { ip: "127.0.0.1", limits: null },
+      )
+    }
+
+    const future = new Date(Date.now() + 45 * 60_000)
+    const res = await sweepSlaEscalations(future, { tenantId: orgA.tenant._id })
+    expect(res.escalated).toBe(1)
+
+    const ticketA = (await queryTickets(ctxA, {})).items[0]
+    const ticketB = (await queryTickets(ctxB, {})).items[0]
+    expect(ticketA.currentLevel).toBe(2)
+    expect(ticketB.currentLevel).toBe(1)
+  })
 })

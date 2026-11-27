@@ -20,13 +20,29 @@ export async function rateLimit({
   const now = Date.now()
   const windowStart = Math.floor(now / windowMs) * windowMs
   const resetAt = windowStart + windowMs
-  const bucket = await db()
-    .collection<Bucket>("rateLimits")
-    .findOneAndUpdate(
-      { _id: `${key}:${windowStart}` },
-      { $inc: { count: 1 }, $setOnInsert: { expiresAt: new Date(resetAt) } },
-      { upsert: true, returnDocument: "after" },
-    )
+  const bucketId = `${key}:${windowStart}`
+  const col = db().collection<Bucket>("rateLimits")
+  const update = { $inc: { count: 1 }, $setOnInsert: { expiresAt: new Date(resetAt) } }
+  let bucket: Bucket | null
+  try {
+    bucket = await col.findOneAndUpdate({ _id: bucketId }, update, {
+      upsert: true,
+      returnDocument: "after",
+    })
+  } catch (err) {
+    // Retry once on simultaneous first-hit E11000 upsert race on a fresh window.
+    if (err && typeof err === "object" && "code" in err && err.code === 11000) {
+      bucket = await col.findOneAndUpdate(
+        { _id: bucketId },
+        { $inc: { count: 1 } },
+        {
+          returnDocument: "after",
+        },
+      )
+    } else {
+      throw err
+    }
+  }
   const count = bucket?.count ?? 1
   return {
     ok: count <= limit,

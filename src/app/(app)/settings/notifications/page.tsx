@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header"
 import { timeZoneOptions } from "@/lib/time-zones"
 import { requireTenantContext } from "@/server/auth/session"
 import { getNotificationPreferences } from "@/server/modules/reports"
+import { can } from "@/server/rbac/ability"
 import { NotificationPrefsForm } from "./prefs-form"
 
 export const metadata: Metadata = { title: "Notification preferences · QR Feed" }
@@ -11,6 +12,11 @@ export const metadata: Metadata = { title: "Notification preferences · QR Feed"
 export default async function NotificationPrefsPage() {
   const ctx = await requireTenantContext()
   const prefs = await getNotificationPreferences(ctx)
+  const canSettings =
+    can(ctx, "settings:manage") ||
+    can(ctx, "settings:sla") ||
+    can(ctx, "tenant:manage") ||
+    can(ctx, "billing:manage")
 
   return (
     <>
@@ -19,7 +25,7 @@ export default async function NotificationPrefsPage() {
         description="Choose how and when you receive alerts, quiet hours and digests."
         breadcrumbs={[
           { label: "Dashboard", href: "/dashboard" },
-          { label: "Settings", href: "/settings" },
+          ...(canSettings ? [{ label: "Settings", href: "/settings" }] : []),
           { label: "Notifications" },
         ]}
       />

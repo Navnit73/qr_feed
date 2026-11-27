@@ -1,9 +1,10 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
+import { redirect } from "next/navigation"
 import { formObject, runAction, type ActionState } from "@/server/actions"
 import { requireTenantContext } from "@/server/auth/session"
-import { createBranch } from "@/server/modules/branches"
+import { archiveBranch, createBranch, updateBranch } from "@/server/modules/branches"
 import {
   archiveLocation,
   createLocation,
@@ -25,6 +26,45 @@ export async function createBranchAction(_: ActionState, form: FormData): Promis
     await createBranch(ctx, formObject(form) as never)
     revalidatePath("/branches")
   })
+}
+
+export async function updateBranchAction(_: ActionState, form: FormData): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    const branchId = String(form.get("branchId") ?? "")
+    const days: Record<string, { enabled: boolean; start: string; end: string }> = {}
+    for (const d of ["0", "1", "2", "3", "4", "5", "6"]) {
+      days[d] = {
+        enabled: form.get(`day_${d}_enabled`) === "on",
+        start: String(form.get(`day_${d}_start`) || "09:00"),
+        end: String(form.get(`day_${d}_end`) || "18:00"),
+      }
+    }
+    const holidays = String(form.get("holidays") ?? "")
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    await updateBranch(ctx, branchId, {
+      name: String(form.get("name") ?? ""),
+      timezone: String(form.get("timezone") ?? "UTC"),
+      address: String(form.get("address") ?? ""),
+      businessHours: { days },
+      holidays,
+    })
+    revalidatePath("/branches")
+    revalidatePath(`/branches/${branchId}`)
+  })
+}
+
+export async function archiveBranchAction(branchId: string): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  const res = await runAction(async () => {
+    await archiveBranch(ctx, branchId)
+    revalidatePath("/branches")
+  })
+  if (res.ok) redirect("/branches")
+  return res
 }
 
 export async function createLocationAction(_: ActionState, form: FormData): Promise<ActionState> {

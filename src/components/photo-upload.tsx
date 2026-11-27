@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Icon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { compressImageFile } from "@/lib/image-compress"
@@ -38,25 +38,42 @@ export function PhotoUpload({
   entityId,
   maxFiles = 3,
   label = "Add photos (optional)",
-  hint = "Up to 3 photos, max 5 MB each. Location metadata is stripped automatically.",
+  hint,
   removeLabel = "Remove photo",
   uploadingLabel = "Uploading photo…",
   onChange,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const previewUrlsRef = useRef<Set<string>>(new Set())
+  const photosRef = useRef<UploadedPhoto[]>([])
   const [photos, setPhotos] = useState<UploadedPhoto[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  function update(next: UploadedPhoto[]) {
-    setPhotos(next)
-    onChange?.(next)
+  const resolvedHint =
+    hint ?? `Up to ${maxFiles} photos, max 5 MB each. Location metadata is stripped automatically.`
+
+  useEffect(() => {
+    const urls = previewUrlsRef.current
+    return () => {
+      for (const url of urls) URL.revokeObjectURL(url)
+      urls.clear()
+    }
+  }, [])
+
+  function update(updater: (prev: UploadedPhoto[]) => UploadedPhoto[]) {
+    setPhotos((prev) => {
+      const next = updater(prev)
+      photosRef.current = next
+      onChange?.(next)
+      return next
+    })
   }
 
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return
     setError(null)
-    const remaining = maxFiles - photos.length
+    const remaining = maxFiles - photosRef.current.length
     if (remaining <= 0) {
       setError(`You can attach up to ${maxFiles} photos.`)
       return
@@ -87,6 +104,7 @@ export function PhotoUpload({
         }
 
         const previewUrl = URL.createObjectURL(file)
+        previewUrlsRef.current.add(previewUrl)
         added.push({
           id: mode === "public" ? json.data.attachmentId : json.data.id,
           claimToken: mode === "public" ? json.data.claimToken : undefined,
@@ -94,10 +112,10 @@ export function PhotoUpload({
           previewUrl,
         })
       }
-      update([...photos, ...added])
+      update((prev) => [...prev, ...added])
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not upload photo.")
-      if (added.length > 0) update([...photos, ...added])
+      if (added.length > 0) update((prev) => [...prev, ...added])
     } finally {
       setUploading(false)
       if (inputRef.current) inputRef.current.value = ""
@@ -105,9 +123,13 @@ export function PhotoUpload({
   }
 
   function remove(id: string) {
-    const target = photos.find((p) => p.id === id)
-    if (target) URL.revokeObjectURL(target.previewUrl)
-    update(photos.filter((p) => p.id !== id))
+    if (uploading) return
+    const target = photosRef.current.find((p) => p.id === id)
+    if (target) {
+      URL.revokeObjectURL(target.previewUrl)
+      previewUrlsRef.current.delete(target.previewUrl)
+    }
+    update((prev) => prev.filter((p) => p.id !== id))
   }
 
   return (
@@ -133,9 +155,10 @@ export function PhotoUpload({
             <img src={p.previewUrl} alt={p.filename} className="size-full object-cover" />
             <button
               type="button"
+              disabled={uploading}
               onClick={() => remove(p.id)}
               aria-label={`${removeLabel} ${p.filename}`}
-              className="absolute top-1 right-1 grid size-6 place-items-center rounded-full bg-foreground text-background hover:bg-destructive hover:text-destructive-foreground"
+              className="absolute top-1 right-1 grid size-6 place-items-center rounded-full bg-foreground text-background hover:bg-destructive hover:text-destructive-foreground disabled:opacity-50"
             >
               <Icon name="close" className="size-3.5" />
             </button>
@@ -169,7 +192,7 @@ export function PhotoUpload({
       {error ? (
         <p className="text-sm text-destructive">{error}</p>
       ) : (
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        <p className="text-xs text-muted-foreground">{resolvedHint}</p>
       )}
     </div>
   )

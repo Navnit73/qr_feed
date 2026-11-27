@@ -103,4 +103,42 @@ describe("SLA due-date calculator (F-4.2 / T-SLA-1)", () => {
       }).state,
     ).toBe("met")
   })
+
+  it("converges accurately across DST transitions in negative and positive offset zones", () => {
+    // America/Los_Angeles springs forward Sunday 2026-03-08 02:00 -> 03:00 (PST -08 -> PDT -07).
+    // Friday 2026-03-06 17:30 PST = 2026-03-07T01:30:00Z. +60m -> 30m Fri + 30m Mon 09:30 PDT = 16:30Z.
+    const laFri = new Date("2026-03-07T01:30:00.000Z")
+    const laDue = addBusinessMinutes(laFri, 60, {
+      mode: "business_hours",
+      timezone: "America/Los_Angeles",
+      businessHours: DEFAULT_BUSINESS_HOURS,
+    })
+    expect(laDue.toISOString()).toBe("2026-03-09T16:30:00.000Z")
+
+    // Pacific/Auckland (+13 NZDT in March -> +12 NZST in April).
+    // Friday 2026-04-03 17:30 NZDT = 2026-04-03T04:30:00Z. DST ends Sunday 2026-04-05.
+    // +60m -> 30m Fri + 30m Mon 09:30 NZST (+12) = 2026-04-05T21:30:00Z.
+    const nzFri = new Date("2026-04-03T04:30:00.000Z")
+    const nzDue = addBusinessMinutes(nzFri, 60, {
+      mode: "business_hours",
+      timezone: "Pacific/Auckland",
+      businessHours: DEFAULT_BUSINESS_HOURS,
+    })
+    expect(nzDue.toISOString()).toBe("2026-04-05T21:30:00.000Z")
+  })
+
+  it("reports a sensible label when breached is flagged before resolveDueAt", () => {
+    const createdAt = new Date("2026-11-26T10:00:00.000Z")
+    const res = computeSlaStatus({
+      createdAt,
+      resolveDueAt: new Date("2026-11-26T15:00:00.000Z"),
+      now: new Date("2026-11-26T11:00:00.000Z"),
+      pausedAt: null,
+      resolvedAt: null,
+      breached: true,
+    })
+    expect(res.state).toBe("breached")
+    expect(res.label).toContain("Breached")
+    expect(res.label).not.toContain("overdue")
+  })
 })

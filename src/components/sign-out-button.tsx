@@ -1,6 +1,5 @@
 "use client"
 
-import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { Icon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
@@ -13,7 +12,6 @@ export function SignOutButton({
   redirectTo?: string
   compact?: boolean
 }) {
-  const router = useRouter()
   const [pending, setPending] = useState(false)
   return (
     <Button
@@ -24,9 +22,14 @@ export function SignOutButton({
       aria-label={compact ? "Sign out" : undefined}
       onClick={async () => {
         setPending(true)
-        await authClient.signOut()
-        router.push(redirectTo ? `/sign-in?next=${encodeURIComponent(redirectTo)}` : "/sign-in")
-        router.refresh()
+        try {
+          await fetch("/api/auth/clear-session-cookies", { method: "POST" }).catch(() => {})
+          await authClient.signOut().catch(() => {})
+        } finally {
+          window.location.assign(
+            redirectTo ? `/sign-in?next=${encodeURIComponent(redirectTo)}` : "/sign-in",
+          )
+        }
       }}
     >
       {!pending && <Icon name="signOut" data-icon={compact ? undefined : "inline-start"} />}

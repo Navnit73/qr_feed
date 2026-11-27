@@ -1,9 +1,13 @@
 import "server-only"
-import type { ClientSession, ObjectId } from "mongodb"
+import type { ClientSession } from "mongodb"
+import { ObjectId } from "mongodb"
+import { cache } from "react"
 import { ApiError } from "@/lib/api/errors"
 import { appendAudit } from "@/server/audit/audit-log"
 import { db } from "@/server/db/client"
 import type { TenantContext } from "@/server/db/tenant-context"
+import { withTransaction } from "@/server/db/transaction"
+import { assertCan, can } from "@/server/rbac/ability"
 
 /*
  * The tenants collection is global (it defines tenants), so it lives outside the scoped
@@ -104,8 +108,13 @@ export type TenantRecord = {
 
 export const tenantsCollection = () => db().collection<TenantRecord>("tenants")
 
+const getTenantCached = cache(async (tenantHex: string) =>
+  tenantsCollection().findOne({ _id: new ObjectId(tenantHex) }),
+)
+
 export async function getTenant(tenantId: ObjectId, session?: ClientSession) {
-  return tenantsCollection().findOne({ _id: tenantId }, { session })
+  if (session) return tenantsCollection().findOne({ _id: tenantId }, { session })
+  return getTenantCached(tenantId.toHexString())
 }
 
 /** Throws CONFLICT when adding one more would pass the plan's limit. */
@@ -145,22 +154,28 @@ export async function setTenantStatus({
   tenantId: ObjectId
   status: TenantRecord["status"]
 }) {
-  const before = await getTenant(tenantId)
-  if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
-  if (before.status === status) return before
-  const after = await tenantsCollection().findOneAndUpdate(
-    { _id: tenantId },
-    { $set: { status, updatedAt: new Date() } },
-    { returnDocument: "after" },
-  )
-  await appendAudit(platformContext(actorId, tenantId), {
-    action: status === "suspended" ? "tenant.suspended" : "tenant.reactivated",
-    entity: "tenant",
-    entityId: tenantId,
-    before: { status: before.status },
-    after: { status },
+  return withTransaction(async (session) => {
+    const before = await getTenant(tenantId, session)
+    if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
+    if (before.status === status) return before
+    const after = await tenantsCollection().findOneAndUpdate(
+      { _id: tenantId },
+      { $set: { status, updatedAt: new Date() } },
+      { returnDocument: "after", session },
+    )
+    await appendAudit(
+      platformContext(actorId, tenantId),
+      {
+        action: status === "suspended" ? "tenant.suspended" : "tenant.reactivated",
+        entity: "tenant",
+        entityId: tenantId,
+        before: { status: before.status },
+        after: { status },
+      },
+      { session },
+    )
+    return after!
   })
-  return after!
 }
 
 export async function setTenantLimits({
@@ -174,50 +189,100 @@ export async function setTenantLimits({
   limits: PlanLimits
   plan?: PlanKey
 }) {
-  const before = await getTenant(tenantId)
-  if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
-  const $set: Record<string, unknown> = { limits, updatedAt: new Date() }
-  if (plan) $set.plan = plan
-  await tenantsCollection().updateOne({ _id: tenantId }, { $set })
-  await appendAudit(platformContext(actorId, tenantId), {
-    action: "tenant.limits_changed",
-    entity: "tenant",
-    entityId: tenantId,
-    before: { plan: before.plan, limits: before.limits },
-    after: { plan: plan ?? before.plan, limits },
+  await withTransaction(async (session) => {
+    const before = await getTenant(tenantId, session)
+    if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
+    const $set: Record<string, unknown> = { limits, updatedAt: new Date() }
+    if (plan) $set.plan = plan
+    await tenantsCollection().updateOne({ _id: tenantId }, { $set }, { session })
+    await appendAudit(
+      platformContext(actorId, tenantId),
+      {
+        action: "tenant.limits_changed",
+        entity: "tenant",
+        entityId: tenantId,
+        before: { plan: before.plan, limits: before.limits },
+        after: { plan: plan ?? before.plan, limits },
+      },
+      { session },
+    )
   })
 }
 
+function assertHttpsUrlIfPresent(raw: string | undefined, field: string) {
+  if (!raw) return
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new ApiError("VALIDATION", `Enter a valid HTTPS URL for ${field}.`, {
+      [field]: ["Enter a valid HTTPS URL"],
+    })
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new ApiError("VALIDATION", `Only HTTPS URLs are allowed for ${field}.`, {
+      [field]: ["Use an https:// URL without credentials"],
+    })
+  }
+}
+
 export async function updateTenantBranding(ctx: TenantContext, branding: TenantBranding) {
-  const before = await getTenant(ctx.tenantId)
-  if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
-  await tenantsCollection().updateOne(
-    { _id: ctx.tenantId },
-    { $set: { branding, updatedAt: new Date() } },
-  )
-  await appendAudit(ctx, {
-    action: "tenant.branding_updated",
-    entity: "tenant",
-    entityId: ctx.tenantId,
-    before: before.branding ?? {},
-    after: branding,
+  assertCan(ctx, "tenant:manage")
+  assertHttpsUrlIfPresent(branding.logoUrl, "logoUrl")
+  if (branding.primaryColor && !/^#[0-9a-fA-F]{6}$/.test(branding.primaryColor)) {
+    throw new ApiError("VALIDATION", "Use a 6-digit hex colour like #3730a3.", {
+      primaryColor: ["Use a 6-digit hex colour like #3730a3"],
+    })
+  }
+  await withTransaction(async (session) => {
+    const before = await getTenant(ctx.tenantId, session)
+    if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
+    await tenantsCollection().updateOne(
+      { _id: ctx.tenantId },
+      { $set: { branding, updatedAt: new Date() } },
+      { session },
+    )
+    await appendAudit(
+      ctx,
+      {
+        action: "tenant.branding_updated",
+        entity: "tenant",
+        entityId: ctx.tenantId,
+        before: before.branding ?? {},
+        after: branding,
+      },
+      { session },
+    )
   })
 }
 
 export async function updateTenantSettings(ctx: TenantContext, patch: Partial<TenantSettings>) {
-  const before = await getTenant(ctx.tenantId)
-  if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
-  const next: TenantSettings = { ...(before.settings ?? {}), ...patch }
-  await tenantsCollection().updateOne(
-    { _id: ctx.tenantId },
-    { $set: { settings: next, updatedAt: new Date() } },
-  )
-  await appendAudit(ctx, {
-    action: "tenant.settings_updated",
-    entity: "tenant",
-    entityId: ctx.tenantId,
-    before: before.settings ?? {},
-    after: next,
+  if (!can(ctx, "settings:manage") && !can(ctx, "tenant:manage")) {
+    throw new ApiError("FORBIDDEN", "You don't have permission to update workspace settings.")
+  }
+  assertHttpsUrlIfPresent(patch.slackWebhookUrl, "slackWebhookUrl")
+  assertHttpsUrlIfPresent(patch.teamsWebhookUrl, "teamsWebhookUrl")
+  assertHttpsUrlIfPresent(patch.sso?.issuerUrl, "ssoIssuerUrl")
+  return withTransaction(async (session) => {
+    const before = await getTenant(ctx.tenantId, session)
+    if (!before) throw new ApiError("NOT_FOUND", "Tenant not found.")
+    const next: TenantSettings = { ...(before.settings ?? {}), ...patch }
+    await tenantsCollection().updateOne(
+      { _id: ctx.tenantId },
+      { $set: { settings: next, updatedAt: new Date() } },
+      { session },
+    )
+    await appendAudit(
+      ctx,
+      {
+        action: "tenant.settings_updated",
+        entity: "tenant",
+        entityId: ctx.tenantId,
+        before: before.settings ?? {},
+        after: next,
+      },
+      { session },
+    )
+    return next
   })
-  return next
 }

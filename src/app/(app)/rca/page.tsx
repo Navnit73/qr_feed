@@ -23,7 +23,7 @@ export default async function RcaPage({ searchParams }: PageProps<"/rca">) {
   const fromTicketId = typeof sp.fromTicket === "string" ? sp.fromTicket : undefined
   const [{ rcas, capas }, sourceTicketDoc] = await Promise.all([
     listRcas(ctx),
-    fromTicketId ? tickets.forTenant(ctx).findById(fromTicketId) : null,
+    fromTicketId && can(ctx, "ticket:read") ? tickets.forTenant(ctx).findById(fromTicketId) : null,
   ])
 
   // eslint-disable-next-line react-hooks/purity -- single server render per request
@@ -34,6 +34,11 @@ export default async function RcaPage({ searchParams }: PageProps<"/rca">) {
       (a) => a.status !== "completed" && a.status !== "verified" && a.dueDate.getTime() < now,
     ).length
   const pendingEff = capas.filter((c) => c.status === "pending_effectiveness").length
+  const capaCountByRca = new Map<string, number>()
+  for (const c of capas) {
+    const key = c.rcaId.toHexString()
+    capaCountByRca.set(key, (capaCountByRca.get(key) ?? 0) + 1)
+  }
 
   const sourceTicket = sourceTicketDoc
     ? {
@@ -54,7 +59,11 @@ export default async function RcaPage({ searchParams }: PageProps<"/rca">) {
         breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "RCA & CAPA" }]}
         actions={
           can(ctx, "rca:manage") && (
-            <CreateRcaDialog defaultOpen={Boolean(sourceTicket)} sourceTicket={sourceTicket} />
+            <CreateRcaDialog
+              key={sourceTicket?.id ?? "none"}
+              defaultOpen={Boolean(sourceTicket)}
+              sourceTicket={sourceTicket}
+            />
           )
         }
       />
@@ -93,7 +102,7 @@ export default async function RcaPage({ searchParams }: PageProps<"/rca">) {
               <tbody className="divide-y">
                 {rcas.map((r) => {
                   const id = r._id.toHexString()
-                  const count = capas.filter((c) => c.rcaId.equals(r._id)).length
+                  const count = capaCountByRca.get(id) ?? 0
                   return (
                     <tr key={id} className="hover:bg-muted/30">
                       <td className="px-4 py-3 font-mono text-xs font-semibold">

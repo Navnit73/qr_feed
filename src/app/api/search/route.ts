@@ -1,5 +1,5 @@
 import { ok, withApi } from "@/lib/api/response"
-import { requireTenantContext } from "@/server/auth/session"
+import { requireApiTenantContext } from "@/server/auth/session"
 import { can } from "@/server/rbac/ability"
 import { locations, tickets } from "@/server/repositories"
 
@@ -8,7 +8,7 @@ function escapeRegex(s: string) {
 }
 
 export const GET = withApi(async (req: Request) => {
-  const ctx = await requireTenantContext()
+  const ctx = await requireApiTenantContext()
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim().slice(0, 80)
   if (q.length < 2) return ok({ tickets: [], locations: [] })
 
@@ -24,16 +24,22 @@ export const GET = withApi(async (req: Request) => {
               { locationPath: regex },
             ],
           },
-          { sort: { createdAt: -1 }, limit: 6 },
+          {
+            sort: { createdAt: -1 },
+            limit: 6,
+            projection: { number: 1, categoryName: 1, locationPath: 1, status: 1, severity: 1 },
+          },
         )
       : [],
     can(ctx, "location:read")
-      ? locations
-          .forTenant(ctx)
-          .find(
-            { status: "active", $or: [{ name: regex }, { code: regex }] },
-            { sort: { name: 1 }, limit: 6 },
-          )
+      ? locations.forTenant(ctx).find(
+          { status: "active", $or: [{ name: regex }, { code: regex }] },
+          {
+            sort: { name: 1 },
+            limit: 6,
+            projection: { branchId: 1, name: 1, path: 1, type: 1 },
+          },
+        )
       : [],
   ])
 

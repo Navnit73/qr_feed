@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState, useTransition } from "react"
 import { FormField, FormMessage, FormSelect, SubmitButton } from "@/components/form"
 import { Icon } from "@/components/icons"
 import { Modal } from "@/components/modal"
+import { useSweetAlert } from "@/components/sweet-alert"
 import { Button } from "@/components/ui/button"
 import { createSavedReportAction, deleteSavedReportAction, sendDigestNowAction } from "./actions"
 
@@ -114,22 +115,33 @@ function SaveReportForm({
   )
 }
 
-export function SavedReportActions({ id, hasRecipients }: { id: string; hasRecipients: boolean }) {
+export function SavedReportActions({
+  id,
+  hasRecipients,
+  canExport,
+}: {
+  id: string
+  hasRecipients: boolean
+  canExport: boolean
+}) {
   const [pending, startTransition] = useTransition()
-  const [note, setNote] = useState<string | null>(null)
+  const [note, setNote] = useState<{ text: string; isError: boolean } | null>(null)
+  const swal = useSweetAlert()
   return (
-    <div className="flex items-center gap-1.5">
-      {hasRecipients && (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {hasRecipients && canExport && (
         <Button
           variant="outline"
           size="sm"
           loading={pending}
-          onClick={() =>
+          onClick={() => {
+            setNote(null)
             startTransition(async () => {
               const res = await sendDigestNowAction(id)
-              if (res?.ok) setNote(`Sent (${res.data.sentTo})`)
+              if (res?.ok) setNote({ text: `Sent (${res.data.sentTo})`, isError: false })
+              else if (res) setNote({ text: res.error.message, isError: true })
             })
-          }
+          }}
         >
           Send now
         </Button>
@@ -137,12 +149,29 @@ export function SavedReportActions({ id, hasRecipients }: { id: string; hasRecip
       <Button
         variant="ghost"
         size="sm"
-        loading={pending}
-        onClick={() => startTransition(() => void deleteSavedReportAction(id))}
+        disabled={pending}
+        onClick={() =>
+          swal.fire({
+            tone: "warning",
+            title: "Delete saved report?",
+            text: "Any scheduled email digest for this report will also stop.",
+            confirmText: "Delete",
+            cancelText: "Keep it",
+            confirmVariant: "destructive",
+            onConfirm: async () => {
+              const res = await deleteSavedReportAction(id)
+              if (res && !res.ok) throw new Error(res.error.message)
+            },
+          })
+        }
       >
         Delete
       </Button>
-      {note && <span className="text-xs text-success">{note}</span>}
+      {note && (
+        <span className={note.isError ? "text-xs text-destructive" : "text-xs text-success"}>
+          {note.text}
+        </span>
+      )}
     </div>
   )
 }

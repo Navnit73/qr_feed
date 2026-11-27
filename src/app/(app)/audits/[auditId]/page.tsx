@@ -20,7 +20,10 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[au
   const { auditId } = await params
 
   const detail = await getAuditDetail(ctx, auditId).catch((err) => {
-    if (err instanceof ApiError && (err.code === "NOT_FOUND" || err.code === "VALIDATION")) {
+    if (
+      err instanceof ApiError &&
+      (err.code === "NOT_FOUND" || err.code === "VALIDATION" || err.code === "FORBIDDEN")
+    ) {
       notFound()
     }
     throw err
@@ -30,6 +33,7 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[au
   const id = audit._id.toHexString()
   const canRun = can(ctx, "audit:run", { branchId: audit.branchId })
   const canRca = can(ctx, "rca:manage")
+  const canReadRca = can(ctx, "rca:read")
 
   return (
     <>
@@ -121,20 +125,47 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[au
                         </span>
                       </div>
                       <p className="mt-1.5 text-sm">{f.description}</p>
+                      {f.evidence.length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap gap-2">
+                          {f.evidence.map((aid) => (
+                            <a
+                              key={aid}
+                              href={`/api/files/${aid}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block size-16 overflow-hidden rounded-lg border bg-muted"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={`/api/files/${aid}`}
+                                alt="Finding evidence"
+                                className="size-full object-cover"
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {canRca && (
-                      <ConvertFindingButton
-                        auditId={id}
-                        findingId={f._id.toHexString()}
-                        rcaId={f.rcaId ? f.rcaId.toHexString() : null}
-                      />
-                    )}
+                    {f.rcaId
+                      ? canReadRca && (
+                          <Link
+                            href={`/rca/${f.rcaId.toHexString()}`}
+                            className={buttonVariants({ variant: "outline", size: "sm" })}
+                          >
+                            RCA linked →
+                          </Link>
+                        )
+                      : canRca && (
+                          <ConvertFindingButton auditId={id} findingId={f._id.toHexString()} />
+                        )}
                   </li>
                 ))}
               </ul>
             )}
 
-            {canRun && <AddFindingForm auditId={id} branchId={audit.branchId.toHexString()} />}
+            {canRun && audit.status !== "completed" && (
+              <AddFindingForm auditId={id} branchId={audit.branchId.toHexString()} />
+            )}
           </div>
         </PanelCard>
       </div>

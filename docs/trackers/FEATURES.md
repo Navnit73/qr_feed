@@ -10,7 +10,7 @@ One row per feature. **Tests** lists the IDs from [TESTS.md](TESTS.md) that prov
 | F-0.1  | Design system: tokens, restricted palette, dark mode, `/design` page             | ✅     | T-E2E-1                         | Rules in CLAUDE.md; Sheet, DropdownMenu, Avatar showcased on `/design`  |
 | F-0.2  | Test layers: Vitest + Testing Library (unit/component), Playwright (e2e)         | ✅     | all                             | `pnpm test`, `pnpm test:e2e`                                            |
 | F-0.3  | UI kit: Button `loading`, StatCard, PanelCard, EmptyState, Icon registry         | ✅     | T-UI-1, T-UI-2, T-UI-3, T-E2E-2 |                                                                         |
-| F-0.4  | UI kit: Breadcrumbs, Modal, SweetAlert (`useSweetAlert`)                         | ✅     | T-UI-4, T-UI-5, T-UI-6, T-E2E-2 | Provider mounted in root layout                                         |
+| F-0.4  | UI kit: Breadcrumbs, Modal, SweetAlert (`useSweetAlert`)                         | ✅     | T-UI-4, T-UI-5, T-UI-6, T-E2E-2 | Provider scoped to `(app)`, `/super`, `/design` (lean public bundle)    |
 | F-0.5  | UI kit: charts (AreaTrend, BarCompare, DonutChart) with a11y data tables         | ✅     | T-UI-7, T-E2E-2                 | Recharts via shadcn chart                                               |
 | F-0.6  | API envelope: `ok`/`fail`/`withApi`, `apiFetch`/`unwrap`, `/api/health`          | ✅     | T-API-1, T-API-2, T-E2E-3       | `src/lib/api`                                                           |
 | F-0.7  | CI: GitHub Actions running format, lint, typecheck, unit, integration, e2e       | ✅     | all                             | `.github/workflows/ci.yml`; verified green locally via `pnpm check`     |
@@ -23,27 +23,27 @@ One row per feature. **Tests** lists the IDs from [TESTS.md](TESTS.md) that prov
 
 ## P1 · Tenancy, auth, RBAC, hierarchy
 
-| ID    | Feature                                                                | Status | Tests                                | Notes                                                                      |
-| ----- | ---------------------------------------------------------------------- | ------ | ------------------------------------ | -------------------------------------------------------------------------- |
-| F-1.1 | Tenant onboarding: sign-up → create org → first branch                 | ✅     | T-ORG-1, T-E2E-4                     | One transaction; unique slug; trial limits                                 |
-| F-1.2 | Auth: email + password, sessions, password reset                       | ✅     | T-E2E-4, T-UI-10                     | Better Auth + Resend email delivery (console fallback in dev)              |
-| F-1.3 | Users: invite links, accept, edit access, deactivate                   | ✅     | T-MEM-1, T-E2E-4                     | Supports both system and custom roles                                      |
-| F-1.4 | Roles & permissions, enforced in proxy, services and UI                | ✅     | T-RBAC-1, T-ROLE-1, T-MEM-1, T-E2E-4 | 8 system roles + full custom-role editor UI with no-escalation enforcement |
-| F-1.5 | Location hierarchy: building › floor › department › location (tree UI) | ✅     | T-LOC-1, T-LOC-2, T-E2E-4            | Create, rename, move (rewrites descendants & checks cycles), archive       |
-| F-1.6 | Super-admin console: tenants, suspend/reactivate, plan limits          | ✅     | T-ORG-1, T-E2E-4                     | Plan & limits editor dialog + platform health metrics                      |
-| F-1.7 | Append-only, hash-chained audit log wired into every mutation          | ✅     | T-AUD-1, T-E2E-4                     | Gap-free under concurrency; verify on the audit page                       |
+| ID    | Feature                                                                      | Status | Tests                                | Notes                                                                              |
+| ----- | ---------------------------------------------------------------------------- | ------ | ------------------------------------ | ---------------------------------------------------------------------------------- |
+| F-1.1 | Tenant onboarding: sign-up → create org → first branch                       | ✅     | T-ORG-1, T-E2E-4                     | One transaction; unique slug; trial limits                                         |
+| F-1.2 | Auth: email + password, sessions, password reset                             | ✅     | T-E2E-4, T-UI-10                     | Better Auth + Resend email delivery (console fallback in dev)                      |
+| F-1.3 | Users: invite links, accept, edit access, deactivate                         | ✅     | T-MEM-1, T-E2E-4                     | Supports both system and custom roles                                              |
+| F-1.4 | Roles & permissions, enforced in proxy, services and UI                      | ✅     | T-RBAC-1, T-ROLE-1, T-MEM-1, T-E2E-4 | 8 system roles + full custom-role editor UI with no-escalation enforcement         |
+| F-1.5 | Location hierarchy: building › floor › department › location (tree UI)       | ✅     | T-LOC-1, T-LOC-2, T-LIB-9, T-E2E-4   | Create, rename, move, archive; collapsible site map with QR coverage & setup guide |
+| F-1.6 | Super-admin console: tenants, suspend/reactivate, plan limits, impersonation | ✅     | T-ORG-1, T-E2E-4                     | Plan/limits dialog, platform health, HMAC-signed audited impersonation             |
+| F-1.7 | Append-only, hash-chained audit log wired into every mutation                | ✅     | T-AUD-1, T-E2E-4                     | Gap-free under concurrency; verify on the audit page                               |
 
 ## P2 · QR & public feedback intake
 
-| ID    | Feature                                                                          | Status | Tests                             | Notes                                                                  |
-| ----- | -------------------------------------------------------------------------------- | ------ | --------------------------------- | ---------------------------------------------------------------------- |
-| F-2.1 | QR generation per location, single + bulk, SVG/PNG                               | ✅     | T-QR-2, T-LIB-4, T-QRI-1, T-E2E-6 | 10-char look-alike-free codes, one active per location                 |
-| F-2.2 | Printable labelled QR sheet; revoke/regenerate; scan counts                      | ✅     | T-QR-2, T-E2E-6                   | Browser print → PDF; no PDF library                                    |
-| F-2.3 | Public form `/f/[code]`: category, rating, photos, description, urgency, contact | ✅     | T-INT-1, T-UP-1, T-UI-8, T-E2E-6  | Client compression + S3/R2 or local storage + EXIF/GPS stripping       |
-| F-2.4 | Anti-abuse: rate limits, repeat-report merging, Turnstile                        | ✅     | T-RL-1, T-INT-1, T-TS-1, T-LOAD-1 | Turnstile switches on when keys are set                                |
-| F-2.5 | Ticket numbering, confirmation, private tracking link `/t/[token]`, email/SMS    | ✅     | T-INT-1, T-E2E-6, T-E2E-8         | Token hashed at rest; Resend email & Twilio SMS reporter confirmations |
-| F-2.6 | Feedback categories per industry, seeded at onboarding + editable in Settings    | ✅     | T-LIB-5, T-QR-2                   | Configurable RCA & evidence requirements in `/settings?tab=categories` |
-| F-2.7 | i18n for the public form & tracking page (with RTL)                              | ✅     | T-I18N-1, T-E2E-8                 | English, Hindi, Spanish, French, Arabic (`dir="rtl"`), auto-detection  |
+| ID    | Feature                                                                          | Status | Tests                             | Notes                                                                                                                                                        |
+| ----- | -------------------------------------------------------------------------------- | ------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-2.1 | QR generation per location, single + bulk, SVG/PNG                               | ✅     | T-QR-2, T-LIB-4, T-QRI-1, T-E2E-6 | 10-char look-alike-free codes, one active per location                                                                                                       |
+| F-2.2 | Printable labelled QR sheet & branch ZIP; revoke/regenerate; scan counts         | ✅     | T-QR-2, T-E2E-6                   | Browser print → PDF + `/api/branches/[branchId]/qr-zip` PNG bundle                                                                                           |
+| F-2.3 | Public form `/f/[code]`: category, rating, photos, description, urgency, contact | ✅     | T-INT-1, T-UP-1, T-UI-8, T-E2E-6  | Client compression + S3/R2 or local storage + EXIF/GPS stripping. Mobile-first redesign: indigo hero, step cards, category icons (T-LIB-10), sticky send bar |
+| F-2.4 | Anti-abuse: rate limits, repeat-report merging, Turnstile                        | ✅     | T-RL-1, T-INT-1, T-TS-1, T-LOAD-1 | Turnstile switches on when keys are set                                                                                                                      |
+| F-2.5 | Ticket numbering, confirmation, private tracking link `/t/[token]`, email/SMS    | ✅     | T-INT-1, T-E2E-6, T-E2E-8         | Token hashed at rest; Resend email & Twilio SMS reporter confirmations                                                                                       |
+| F-2.6 | Feedback categories per industry, seeded at onboarding + editable in Settings    | ✅     | T-LIB-5, T-QR-2                   | Configurable RCA & evidence requirements in `/settings?tab=categories`                                                                                       |
+| F-2.7 | i18n for the public form & tracking page (with RTL)                              | ✅     | T-I18N-1, T-E2E-8                 | English, Hindi, Spanish, French, Arabic (`dir="rtl"`), auto-detection                                                                                        |
 
 ## P3 · Ticketing core & assignment
 
@@ -121,10 +121,10 @@ One row per feature. **Tests** lists the IDs from [TESTS.md](TESTS.md) that prov
 
 ## P10 · Hardening & launch
 
-| ID     | Feature                                                     | Status | Tests            | Notes                                                              |
-| ------ | ----------------------------------------------------------- | ------ | ---------------- | ------------------------------------------------------------------ |
-| F-10.1 | Security review (OWASP ASVS), HTTP security headers         | ✅     | T-ISO-1          | `docs/SECURITY.md` + security headers in `next.config.ts`          |
-| F-10.2 | Backups and restore drill                                   | ✅     | T-BK-1           | `scripts/backup-restore.mts` + automated EJSON drop/restore/verify |
-| F-10.3 | Load test of the public form                                | ✅     | T-LOAD-1         | `scripts/load-test.mts` + concurrent burst & rate-limit test       |
-| F-10.4 | Observability: `/api/health` metrics + super-admin health   | ✅     | T-E2E-3          | DB ping latency, open/breached SLA counters & worker heartbeat     |
-| F-10.5 | Docs, help centre, demo tenant, legal pages, marketing site | ✅     | T-E2E-5, T-E2E-8 | `/help`, `/terms`, `/privacy`, `/dpa`, enriched `scripts/seed.mts` |
+| ID     | Feature                                                   | Status | Tests                     | Notes                                                                              |
+| ------ | --------------------------------------------------------- | ------ | ------------------------- | ---------------------------------------------------------------------------------- |
+| F-10.1 | Security review (OWASP ASVS), HTTP security headers       | ✅     | T-ISO-1                   | `docs/SECURITY.md` + security headers in `next.config.ts`                          |
+| F-10.2 | Backups and restore drill                                 | ✅     | T-BK-1                    | `scripts/backup-restore.mts` + automated EJSON drop/restore/verify                 |
+| F-10.3 | Load test of the public form                              | ✅     | T-LOAD-1                  | `scripts/load-test.mts` + concurrent burst & rate-limit test                       |
+| F-10.4 | Observability: `/api/health` metrics + super-admin health | ✅     | T-E2E-3                   | DB ping latency, open/breached SLA counters & worker heartbeat                     |
+| F-10.5 | Docs, help centre, 1-click demo workspace, legal pages    | ✅     | T-AUD-3, T-E2E-4, T-E2E-7 | `/help`, `/terms`, `/privacy`, `/dpa`, idempotent 1-click Demo Login on `/sign-in` |

@@ -12,9 +12,18 @@ import {
   UserMenu,
   type ShellData,
 } from "@/components/app-shell"
+import { Icon } from "@/components/icons"
 import { PageSkeleton, Skeleton } from "@/components/skeleton"
+import { SweetAlertProvider } from "@/components/sweet-alert"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { requireTenantContext, requireUser } from "@/server/auth/session"
+import { Button } from "@/components/ui/button"
+import { stopImpersonationAction } from "@/app/super/actions"
+import {
+  getActiveImpersonation,
+  requireTenantContext,
+  requireUser,
+  type ImpersonationInfo,
+} from "@/server/auth/session"
 import { listNotifications, unreadNotificationCount } from "@/server/modules/notifications"
 import { getTenant } from "@/server/modules/tenants"
 import { can } from "@/server/rbac/ability"
@@ -28,55 +37,90 @@ import { branches, locations, members, roles, tickets } from "@/server/repositor
  */
 export default function AppLayout({ children }: LayoutProps<"/">) {
   return (
-    <AppShellFrame
-      sidebar={
-        <Suspense fallback={<SidebarSkeleton />}>
-          <Sidebar />
-        </Suspense>
-      }
-      header={
-        <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
-          <div className="flex h-16 items-center gap-2 px-4 sm:px-6 lg:px-8">
-            <Suspense fallback={<Skeleton className="size-11 lg:hidden" />}>
-              <MobileMenu />
-            </Suspense>
-            <SidebarCollapseButton />
-            <Brand className="mr-2" labelClassName="hidden text-primary sm:inline" />
-            <div className="ml-auto flex items-center gap-1.5">
-              <Suspense fallback={null}>
-                <HeaderTools />
+    <SweetAlertProvider>
+      <AppShellFrame
+        sidebar={
+          <Suspense fallback={<SidebarSkeleton />}>
+            <Sidebar />
+          </Suspense>
+        }
+        banner={
+          <Suspense fallback={null}>
+            <ImpersonationBanner />
+          </Suspense>
+        }
+        header={
+          <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
+            <div className="flex h-16 items-center gap-2 px-4 sm:px-6 lg:px-8">
+              <Suspense fallback={<Skeleton className="size-11 lg:hidden" />}>
+                <MobileMenu />
               </Suspense>
-              <ThemeToggle />
-              <Suspense fallback={<Skeleton className="size-11 rounded-full" />}>
-                <AccountMenu />
-              </Suspense>
+              <SidebarCollapseButton />
+              <Brand className="mr-2" labelClassName="hidden text-primary sm:inline" />
+              <div className="ml-auto flex items-center gap-1.5">
+                <Suspense
+                  fallback={
+                    <div className="flex items-center gap-1.5">
+                      <Skeleton className="hidden h-9 w-28 md:block" />
+                      <Skeleton className="h-9 w-9 sm:w-48 lg:w-60" />
+                      <Skeleton className="size-11 rounded-lg" />
+                    </div>
+                  }
+                >
+                  <HeaderTools />
+                </Suspense>
+                <ThemeToggle />
+                <Suspense fallback={<Skeleton className="size-11 rounded-full" />}>
+                  <AccountMenu />
+                </Suspense>
+              </div>
             </div>
-          </div>
-        </header>
-      }
-    >
-      <Suspense fallback={<PageSkeleton />}>{children}</Suspense>
-    </AppShellFrame>
+          </header>
+        }
+      >
+        <Suspense fallback={<PageSkeleton />}>{children}</Suspense>
+      </AppShellFrame>
+    </SweetAlertProvider>
   )
 }
 
-// One lookup per request, shared by the sidebar, drawer, header tools and account menu.
-const getShellData = cache(async (): Promise<ShellData> => {
+type ShellPayload = ShellData & { impersonation: ImpersonationInfo | null }
+
+// One lookup per request, shared by the sidebar, drawer, header tools, banner and account menu.
+const getShellData = cache(async (): Promise<ShellPayload> => {
   const ctx = await requireTenantContext()
-  const [user, tenant, branchDocs, customRoles, unread, recentNotifs, pendingVerifyCount] =
-    await Promise.all([
-      requireUser(),
-      getTenant(ctx.tenantId),
-      can(ctx, "branch:read")
-        ? branches.forTenant(ctx).find({ status: "active" }, { sort: { name: 1 }, limit: 50 })
-        : [],
-      roles.forTenant(ctx).find({}),
-      unreadNotificationCount(ctx),
-      listNotifications(ctx, 8),
-      can(ctx, "ticket:verify") || can(ctx, "ticket:close")
-        ? tickets.forTenant(ctx).count({ status: "pending_verification" })
-        : 0,
-    ])
+  const needsCustomRoleNames = ctx.roles.some((r) => r.startsWith("custom:"))
+  const showUsage = can(ctx, "branch:manage")
+
+  const [
+    user,
+    tenant,
+    impersonation,
+    branchDocs,
+    customRoles,
+    unread,
+    recentNotifs,
+    pendingVerifyCount,
+    locationCount,
+    memberCount,
+  ] = await Promise.all([
+    requireUser(),
+    getTenant(ctx.tenantId),
+    getActiveImpersonation(),
+    can(ctx, "branch:read")
+      ? branches
+          .forTenant(ctx)
+          .find({ status: "active" }, { sort: { name: 1 }, limit: 50, projection: { name: 1 } })
+      : [],
+    needsCustomRoleNames ? roles.forTenant(ctx).find({}, { projection: { name: 1 } }) : [],
+    unreadNotificationCount(ctx),
+    listNotifications(ctx, 8),
+    can(ctx, "ticket:verify") || can(ctx, "ticket:close")
+      ? tickets.forTenant(ctx).count({ status: "pending_verification" })
+      : 0,
+    showUsage ? locations.forTenant(ctx).count({ status: "active" }) : 0,
+    showUsage ? members.forTenant(ctx).count({ status: "active" }) : 0,
+  ])
 
   const customNames = new Map(customRoles.map((r) => [r._id.toHexString(), r.name]))
 
@@ -112,7 +156,12 @@ const getShellData = cache(async (): Promise<ShellData> => {
   if (can(ctx, "user:read")) {
     nav.push({ href: "/users", label: "Users", icon: "users", group: "Workspace" })
   }
-  if (can(ctx, "settings:manage") || can(ctx, "settings:sla") || can(ctx, "tenant:manage")) {
+  const canSettings =
+    can(ctx, "settings:manage") ||
+    can(ctx, "settings:sla") ||
+    can(ctx, "tenant:manage") ||
+    can(ctx, "billing:manage")
+  if (canSettings) {
     nav.push({ href: "/settings", label: "Settings", icon: "settings", group: "Workspace" })
   }
   if (can(ctx, "log:read")) {
@@ -122,18 +171,17 @@ const getShellData = cache(async (): Promise<ShellData> => {
     nav.push({ href: "/super", label: "Super admin", icon: "superAdmin", group: "Platform" })
   }
 
-  // Plan usage is for the people who can grow the plan.
+  // Plan usage is for the people who can grow the plan; reuse branchDocs length when under cap.
   const usage: ShellData["usage"] = []
-  if (tenant && can(ctx, "branch:manage")) {
-    const [b, l, m] = await Promise.all([
-      branches.forTenant(ctx).count({ status: "active" }),
-      locations.forTenant(ctx).count({ status: "active" }),
-      members.forTenant(ctx).count({ status: "active" }),
-    ])
+  if (tenant && showUsage) {
+    const branchCount =
+      branchDocs.length < 50
+        ? branchDocs.length
+        : await branches.forTenant(ctx).count({ status: "active" })
     usage.push(
-      { label: "Branches", used: b, limit: tenant.limits.branches },
-      { label: "Locations", used: l, limit: tenant.limits.locations },
-      { label: "Users", used: m, limit: tenant.limits.users },
+      { label: "Branches", used: branchCount, limit: tenant.limits.branches },
+      { label: "Locations", used: locationCount, limit: tenant.limits.locations },
+      { label: "Users", used: memberCount, limit: tenant.limits.users },
     )
   }
 
@@ -156,11 +204,42 @@ const getShellData = cache(async (): Promise<ShellData> => {
     user: {
       name: user.name,
       email: user.email,
-      roleLabel: ctx.roles[0] ? roleLabel(ctx.roles[0], customNames) : "",
+      roleLabel: impersonation
+        ? "Super admin (impersonating)"
+        : ctx.roles[0]
+          ? roleLabel(ctx.roles[0], customNames)
+          : "",
       isSuperAdmin: user.isSuperAdmin,
+      canSettings,
     },
+    impersonation,
   }
 })
+
+async function ImpersonationBanner() {
+  const { impersonation } = await getShellData()
+  if (!impersonation) return null
+  return (
+    <div
+      role="status"
+      className="border-b border-warning/30 bg-warning/15 px-4 py-2 text-sm text-foreground sm:px-6 lg:px-8"
+    >
+      <div className="mx-auto flex max-w-[88rem] flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2">
+          <Icon name="warning" className="size-4 shrink-0 text-warning" />
+          <span>
+            <strong>Impersonating {impersonation.tenantName}</strong> — {impersonation.reason}
+          </span>
+        </p>
+        <form action={stopImpersonationAction}>
+          <Button type="submit" size="sm" variant="outline">
+            Exit impersonation
+          </Button>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 async function Sidebar() {
   return <SidebarBody data={await getShellData()} />
@@ -188,10 +267,10 @@ async function AccountMenu() {
 function SidebarSkeleton() {
   return (
     <div className="space-y-3 p-5">
-      <Skeleton className="h-9 w-32" />
-      <Skeleton className="h-14 w-full" />
+      <Skeleton className="h-9 w-32 bg-sidebar-accent" />
+      <Skeleton className="h-14 w-full bg-sidebar-accent" />
       {Array.from({ length: 5 }, (_, i) => (
-        <Skeleton key={i} className="h-10 w-full" />
+        <Skeleton key={i} className="h-10 w-full bg-sidebar-accent" />
       ))}
     </div>
   )

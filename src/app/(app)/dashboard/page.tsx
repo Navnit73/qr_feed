@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import { requireTenantContext, requireUser } from "@/server/auth/session"
 import { getDashboard, type Dashboard } from "@/server/modules/dashboard"
 import { can } from "@/server/rbac/ability"
+import { DashboardFilterBar } from "./filter-bar"
 import { Greeting } from "./greeting"
 import { RefreshButton } from "./refresh-button"
 
@@ -25,9 +26,14 @@ export const metadata: Metadata = { title: "Dashboard · QR Feed" }
 type Tickets = NonNullable<Dashboard["tickets"]>
 type Workspace = Dashboard["workspace"]
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: PageProps<"/dashboard">) {
   const ctx = await requireTenantContext()
-  const [user, data] = await Promise.all([requireUser(), getDashboard(ctx)])
+  const sp = await searchParams
+  const branchId = typeof sp.branchId === "string" && sp.branchId ? sp.branchId : undefined
+  const rawDays = typeof sp.days === "string" ? Number(sp.days) : undefined
+  const days = rawDays && [7, 14, 30, 90].includes(rawDays) ? rawDays : 14
+
+  const [user, data] = await Promise.all([requireUser(), getDashboard(ctx, { branchId, days })])
   const { workspace: ws, tickets: t } = data
   // eslint-disable-next-line react-hooks/purity -- a server render happens once per request
   const now = Date.now()
@@ -58,6 +64,12 @@ export default async function DashboardPage() {
       <div className="space-y-6">
         {canManage && <SetupChecklist ws={ws} hasReports={!!t?.recent.length} />}
 
+        <DashboardFilterBar
+          branches={data.branches}
+          branchId={data.filters.branchId}
+          days={data.filters.days}
+        />
+
         {t ? <TicketKpis t={t} ws={ws} /> : <WorkspaceKpis ws={ws} />}
         {t && <SeverityShare t={t} />}
 
@@ -67,7 +79,7 @@ export default async function DashboardPage() {
               <PanelCard
                 className="lg:col-span-2"
                 title="New tickets"
-                description="Per day over the last 14 days"
+                description={`Per day over the last ${data.filters.days} days`}
                 action={
                   <span className="text-sm text-muted-foreground tabular-nums">
                     {t.trend.reduce((s, d) => s + d.reports, 0)} total
@@ -152,7 +164,7 @@ export default async function DashboardPage() {
 
 function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <StatCard
         label="Open tickets"
         value={t.open}
@@ -182,6 +194,25 @@ function TicketKpis({ t, ws }: { t: Tickets; ws: Workspace }) {
         footer={
           t.newThisWeekDelta === undefined && <p className="text-muted-foreground">Last 7 days</p>
         }
+      />
+      <StatCard
+        label="On-time SLA"
+        value={t.slaCompliancePct === null ? "–" : `${t.slaCompliancePct}%`}
+        icon="sla"
+        tone="rose"
+        footer={
+          <p className="text-muted-foreground">
+            <span className="font-semibold text-destructive tabular-nums">{t.overdueOpen}</span>{" "}
+            overdue open
+          </p>
+        }
+      />
+      <StatCard
+        label="Average resolution"
+        value={t.mttrHours === null ? "–" : `${t.mttrHours}h`}
+        icon="clock"
+        tone="orange"
+        footer={<p className="text-muted-foreground">Mean time to resolve (active SLA)</p>}
       />
       <StatCard
         label="Average rating"

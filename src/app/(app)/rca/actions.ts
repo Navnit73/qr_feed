@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache"
 import { formObject, runAction, type ActionState } from "@/server/actions"
 import { requireTenantContext } from "@/server/auth/session"
 import {
+  closeRca,
   createCapa,
   createRca,
+  linkTicketToRca,
   signRcaApproval,
   updateCapaActionStatus,
   updateRcaAnalysis,
@@ -46,10 +48,15 @@ export async function updateRcaAnalysisAction(
   return runAction(async () => {
     const raw = formObject(form)
     const rcaId = String(raw.rcaId ?? "")
+    const dynamicWhys = form.getAll("whys").map((w) => String(w ?? ""))
+    const whys =
+      dynamicWhys.length > 0
+        ? dynamicWhys
+        : [raw.why1, raw.why2, raw.why3, raw.why4, raw.why5].map((w) => String(w ?? ""))
     await updateRcaAnalysis(ctx, rcaId, {
       method: String(raw.method || "5why") as "5why" | "fishbone" | "8d",
       problemStatement: String(raw.problemStatement ?? ""),
-      whys: [raw.why1, raw.why2, raw.why3, raw.why4, raw.why5].map((w) => String(w ?? "")),
+      whys,
       fishbone: {
         man: splitLines(raw.fb_man),
         machine: splitLines(raw.fb_machine),
@@ -62,6 +69,7 @@ export async function updateRcaAnalysisAction(
       rootCause: String(raw.rootCause ?? ""),
     })
     revalidatePath(`/rca/${rcaId}`)
+    revalidatePath("/rca")
   })
 }
 
@@ -70,16 +78,35 @@ export async function createCapaAction(_: ActionState, form: FormData): Promise<
   return runAction(async () => {
     const raw = formObject(form)
     const rcaId = String(raw.rcaId ?? "")
-    const actionTitles = splitLines(raw.actionTitles)
-    const ownerId = String(raw.ownerId ?? ctx.actorId)
-    const dueDate = String(raw.dueDate ?? new Date(Date.now() + 7 * 86_400_000).toISOString())
+    const fallbackOwner = String(raw.ownerId ?? ctx.actorId)
+    const fallbackDue = String(raw.dueDate ?? new Date(Date.now() + 7 * 86_400_000).toISOString())
+
+    const rowTitles = form.getAll("actionTitle").map((v) => String(v ?? "").trim())
+    const rowOwners = form.getAll("actionOwnerId").map((v) => String(v ?? "").trim())
+    const rowDues = form.getAll("actionDueDate").map((v) => String(v ?? "").trim())
+
+    const actions =
+      rowTitles.length > 0
+        ? rowTitles
+            .map((title, idx) => ({
+              title,
+              ownerId: rowOwners[idx] || fallbackOwner,
+              dueDate: rowDues[idx] || fallbackDue,
+            }))
+            .filter((a) => a.title.length > 0)
+        : splitLines(raw.actionTitles).map((title) => ({
+            title,
+            ownerId: fallbackOwner,
+            dueDate: fallbackDue,
+          }))
+
     await createCapa(ctx, {
       rcaId,
       title: String(raw.title ?? ""),
       type: String(raw.type || "corrective") as "correction" | "corrective" | "preventive",
       effectivenessDueDays: Number(raw.effectivenessDueDays) || 30,
       effectivenessMethod: String(raw.effectivenessMethod || "30-day recurrence & inspection"),
-      actions: actionTitles.map((title) => ({ title, ownerId, dueDate })),
+      actions,
     })
     revalidatePath(`/rca/${rcaId}`)
     revalidatePath("/rca")
@@ -96,6 +123,7 @@ export async function setCapaActionStatusAction(
   return runAction(async () => {
     await updateCapaActionStatus(ctx, capaId, actionId, status)
     revalidatePath(`/rca/${rcaId}`)
+    revalidatePath("/rca")
   })
 }
 
@@ -127,6 +155,26 @@ export async function signApprovalAction(_: ActionState, form: FormData): Promis
       decision: raw.decision === "rejected" ? "rejected" : "approved",
       comment: String(raw.comment ?? "") || undefined,
     })
+    revalidatePath(`/rca/${rcaId}`)
+    revalidatePath("/rca")
+  })
+}
+
+export async function linkTicketToRcaAction(_: ActionState, form: FormData): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    const rcaId = String(form.get("rcaId") ?? "")
+    const ticketRef = String(form.get("ticketRef") ?? "")
+    await linkTicketToRca(ctx, rcaId, ticketRef)
+    revalidatePath(`/rca/${rcaId}`)
+    revalidatePath("/rca")
+  })
+}
+
+export async function closeRcaAction(rcaId: string): Promise<ActionState> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    await closeRca(ctx, rcaId)
     revalidatePath(`/rca/${rcaId}`)
     revalidatePath("/rca")
   })

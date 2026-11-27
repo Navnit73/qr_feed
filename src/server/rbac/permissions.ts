@@ -152,6 +152,7 @@ export const SYSTEM_ROLES = {
       "ticket:read",
       "ticket:verify",
       "ticket:close",
+      "rca:read",
       "capa:read",
       "capa:verify",
       "branch:read",

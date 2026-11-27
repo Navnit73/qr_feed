@@ -1,5 +1,6 @@
 "use client"
 
+import { useRouter } from "next/navigation"
 import { useActionState, useEffect, useState, useTransition } from "react"
 import { FormField, FormMessage, FormSelect, FormTextarea, SubmitButton } from "@/components/form"
 import { Icon } from "@/components/icons"
@@ -9,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import type { TicketEventType } from "@/lib/ticket-state-machine"
 import {
   addCommentAction,
+  mergeTicketAction,
   quickTransitionAction,
   transitionTicketAction,
   updateTagsAction,
@@ -357,9 +359,83 @@ export function TagsEditor({ ticketId, initial }: { ticketId: string; initial: s
         hint="Comma-separated"
         state={state}
       />
-      <Button type="submit" variant="outline" size="sm">
+      <FormMessage state={state} success="Tags updated." />
+      <SubmitButton variant="outline" size="sm">
         Update tags
-      </Button>
+      </SubmitButton>
+    </form>
+  )
+}
+
+export function MergeTicketDialog({
+  ticketId,
+  ticketNumber,
+}: {
+  ticketId: string
+  ticketNumber: string
+}) {
+  const router = useRouter()
+  const [open, setOpen] = useState(false)
+  return (
+    <Modal
+      open={open}
+      onOpenChange={setOpen}
+      title={`Merge ${ticketNumber} into another ticket`}
+      description="Transfers report count, reporter tracking tokens and photos to the target ticket, then cancels this duplicate."
+      trigger={
+        <Button variant="outline" size="lg">
+          Merge duplicate
+        </Button>
+      }
+    >
+      {open && (
+        <MergeTicketForm
+          sourceId={ticketId}
+          onDone={(targetId) => {
+            setOpen(false)
+            if (targetId) router.push(`/tickets/${targetId}`)
+          }}
+        />
+      )}
+    </Modal>
+  )
+}
+
+function MergeTicketForm({
+  sourceId,
+  onDone,
+}: {
+  sourceId: string
+  onDone: (targetId?: string) => void
+}) {
+  const [state, action] = useActionState(mergeTicketAction, null)
+  useEffect(() => {
+    if (state?.ok) onDone(state.data.targetId)
+  }, [state, onDone])
+
+  return (
+    <form action={action} className="space-y-4">
+      <input type="hidden" name="sourceId" value={sourceId} />
+      <FormField
+        label="Target ticket number"
+        name="target"
+        placeholder="TKT-2026-000001"
+        required
+        state={state}
+      />
+      <FormTextarea
+        label="Reason (optional)"
+        name="reason"
+        placeholder="Duplicate report of the same issue"
+        state={state}
+      />
+      <FormMessage state={state} />
+      <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+        <Button type="button" variant="ghost" size="xl" onClick={() => onDone()}>
+          Cancel
+        </Button>
+        <SubmitButton variant="warning">Merge &amp; cancel duplicate</SubmitButton>
+      </div>
     </form>
   )
 }

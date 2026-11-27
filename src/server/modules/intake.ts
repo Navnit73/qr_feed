@@ -10,19 +10,25 @@ import type { TenantContext } from "@/server/db/tenant-context"
 import { withTransaction } from "@/server/db/transaction"
 import { pickAssignee } from "@/server/modules/assignment"
 import { notifyReporterConfirmation, notifyUser } from "@/server/modules/notifications"
+import { dispatchWebhookEvent } from "@/server/modules/platform"
 import { resolvePublicQr } from "@/server/modules/qr-codes"
 import { computeInitialTicketSla } from "@/server/modules/sla"
-import { tenantsCollection } from "@/server/modules/tenants"
+import { assertWithinLimit, tenantsCollection } from "@/server/modules/tenants"
 import { rateLimit } from "@/server/rate-limit"
-import { assertCan } from "@/server/rbac/ability"
+import { assertCan, resolveAccess } from "@/server/rbac/ability"
 import {
+  attachments,
+  categories,
+  members,
   OPEN_TICKET_STATUSES,
+  roles as rolesRepo,
   ticketActivities,
   ticketComments,
   tickets,
   type TicketStatus,
 } from "@/server/repositories"
-import { env } from "@/server/env"
+import { inBranchScope } from "@/server/db/tenant-context"
+import { appBaseUrl } from "@/server/public-url"
 import { verifyTurnstile } from "@/server/turnstile"
 import { claimPublicAttachments } from "@/server/storage"
 import { objectId } from "@/server/validation"
@@ -157,12 +163,16 @@ export async function submitFeedback(
     )
 
     if (open) {
+      const nextSeverity = maxSeverity(open.severity, severity)
       await repo.updateOne(
         { _id: open._id },
         {
           $inc: { reportCount: 1 },
           $push: { trackingTokenHashes: hash(token) },
-          $set: { lastReportedAt: now },
+          $set: {
+            lastReportedAt: now,
+            ...(nextSeverity !== open.severity ? { severity: nextSeverity } : {}),
+          },
         },
         { session },
       )
@@ -179,6 +189,11 @@ export async function submitFeedback(
       )
       return { ticketId: open._id, number: open.number, trackingToken: token, duplicate: true }
     }
+
+    // Enforce tenant monthly ticket quota (phase.md F-9.1).
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    const monthlyCount = await repo.count({ createdAt: { $gte: monthStart } }, { session })
+    await assertWithinLimit(sys, "monthlyTickets", monthlyCount, session)
 
     const year = now.getUTCFullYear()
     const seq = await nextSequence(`${pub.tenantId.toHexString()}:tickets:${year}`, session)
@@ -266,6 +281,7 @@ export async function submitFeedback(
       input.attachmentIds,
       input.attachmentTokens,
       result.ticketId,
+      hash(result.trackingToken),
     )
     if (claimed.length > 0) {
       await tickets
@@ -289,7 +305,7 @@ export async function submitFeedback(
   if (input.email || input.phone) {
     let baseUrl = "http://localhost:3000"
     try {
-      baseUrl = env().BETTER_AUTH_URL
+      baseUrl = appBaseUrl()
     } catch {
       // Test env without BETTER_AUTH_URL
     }
@@ -302,6 +318,18 @@ export async function submitFeedback(
       email: input.email,
       phone: input.phone,
       duplicate: result.duplicate,
+    })
+  }
+
+  if (!result.duplicate) {
+    dispatchWebhookEvent(sys, "ticket.created", {
+      ticketId: result.ticketId.toHexString(),
+      number: result.number,
+      source: "qr",
+      category: category.label,
+      severity,
+      location: pub.locationPath.join(" › "),
+      summary: `${category.label} at ${pub.locationPath.join(" › ")} (${severity})`,
     })
   }
 
@@ -323,7 +351,8 @@ const STATUS_LABELS: Record<TicketStatus, string> = {
 /** What the reporter's tracking link shows. Plain data only, and nothing about other people. */
 export async function getPublicTicket(token: string) {
   if (!token || token.length < 20 || token.length > 100) return null
-  const t = await tickets.unscoped().findOne({ trackingTokenHashes: hash(token) })
+  const tokenHash = hash(token)
+  const t = await tickets.unscoped().findOne({ trackingTokenHashes: tokenHash })
   if (!t) return null
   const sys: TenantContext = {
     tenantId: t.tenantId,
@@ -332,16 +361,26 @@ export async function getPublicTicket(token: string) {
     permissions: new Set(),
     branchScope: "all",
   }
-  const [tenant, pubComments] = await Promise.all([
+  const attIds = (t.attachments ?? [])
+    .filter((id) => objectId.safeParse(id).success)
+    .map((id) => parseInput(objectId, id))
+  const [tenant, pubComments, attDocs, catDoc] = await Promise.all([
     tenantsCollection().findOne({ _id: t.tenantId }, { projection: { name: 1, branding: 1 } }),
     ticketComments
       .forTenant(sys)
       .find({ ticketId: t._id, visibility: "public" }, { sort: { createdAt: 1 } }),
+    attIds.length > 0 ? attachments.forTenant(sys).find({ _id: { $in: attIds } }) : [],
+    categories.forTenant(sys).findById(t.categoryId, { projection: { key: 1 } }),
   ])
+  const visibleAttachments = attDocs
+    .filter((doc) => !doc.reporterTokenHash || doc.reporterTokenHash === tokenHash)
+    .map((doc) => doc._id.toHexString())
+
   return {
     number: t.number,
     status: t.status,
     statusLabel: STATUS_LABELS[t.status],
+    categoryKey: catDoc?.key ?? null,
     categoryName: t.categoryName,
     locationName: t.locationPath.at(-1) ?? "",
     locationPath: t.locationPath,
@@ -349,7 +388,7 @@ export async function getPublicTicket(token: string) {
     branding: tenant?.branding ?? null,
     createdAt: t.createdAt.toISOString(),
     reportCount: t.reportCount,
-    attachments: t.attachments ?? [],
+    attachments: visibleAttachments,
     publicComments: pubComments.map((c) => ({
       id: c._id.toHexString(),
       authorName: c.authorName,
@@ -398,8 +437,12 @@ export async function submitRequesterFeedback(
   }
   const now = new Date()
   await withTransaction(async (session) => {
-    await tickets.forTenant(sys).updateOne(
-      { _id: t._id },
+    const updated = await tickets.forTenant(sys).updateOne(
+      {
+        _id: t._id,
+        status: "closed",
+        $or: [{ requesterFeedback: null }, { requesterFeedback: { $exists: false } }],
+      },
       {
         $set: {
           requesterFeedback: {
@@ -412,6 +455,9 @@ export async function submitRequesterFeedback(
       },
       { session },
     )
+    if (!updated) {
+      throw new ApiError("CONFLICT", "Feedback can no longer be submitted for this report.")
+    }
     await ticketActivities.forTenant(sys).insertOne(
       {
         branchId: t.branchId,
@@ -426,6 +472,34 @@ export async function submitRequesterFeedback(
       { session },
     )
   })
+
+  // Alert verifiers/admins when a requester reports the issue is NOT resolved.
+  if (!input.resolved) {
+    const [allActive, customRoles] = await Promise.all([
+      members.forTenant(sys).find({ status: "active" }),
+      rolesRepo.forTenant(sys).find({}),
+    ])
+    const targets = allActive.filter((m) => {
+      const access = resolveAccess(m, customRoles)
+      return (
+        (access.permissions.has("ticket:verify") || access.permissions.has("ticket:close")) &&
+        inBranchScope(access.branchScope, t.branchId)
+      )
+    })
+    await Promise.allSettled(
+      targets.slice(0, 5).map((m) =>
+        notifyUser(sys, {
+          userId: m.userId,
+          type: "ticket.reopened",
+          title: `Requester unsatisfied · ${t.number}`,
+          body: input.comment
+            ? `Requester reported issue still unresolved: ${input.comment.slice(0, 140)}`
+            : `Requester reported ${t.categoryName} at ${t.locationPath.at(-1)} is still unresolved.`,
+          href: `/tickets/${t._id.toHexString()}`,
+        }),
+      ),
+    )
+  }
 }
 
 export async function listTickets(
@@ -446,21 +520,22 @@ export async function listTicketActivities(ctx: TenantContext, ticketId: ObjectI
   return ticketActivities.forTenant(ctx).find({ ticketId }, { sort: { at: 1, _id: 1 } })
 }
 
-/** Dashboard numbers. Average rating covers the last 30 days. */
+/** Dashboard/list numbers via fast MongoDB aggregation (no 5,000-doc client scan). */
 export async function ticketStats(ctx: TenantContext) {
   assertCan(ctx, "ticket:read")
   const repo = tickets.forTenant(ctx)
   const now = Date.now()
-  const [open, last24h, rated] = await Promise.all([
+  const dayAgo = new Date(now - 86_400_000)
+  const monthAgo = new Date(now - 30 * 86_400_000)
+  const [open, last24h, ratingAgg] = await Promise.all([
     repo.count({ status: { $in: OPEN_TICKET_STATUSES } }),
-    repo.count({ createdAt: { $gte: new Date(now - 86_400_000) } }),
-    repo.find(
-      { createdAt: { $gte: new Date(now - 30 * 86_400_000) }, rating: { $ne: null } },
-      { limit: 5000 },
-    ),
+    repo.count({ createdAt: { $gte: dayAgo } }),
+    repo.aggregate<{ _id: null; avg: number }>([
+      { $match: { createdAt: { $gte: monthAgo }, rating: { $ne: null } } },
+      { $group: { _id: null, avg: { $avg: "$rating" } } },
+    ]),
   ])
-  const avgRating = rated.length
-    ? Math.round((rated.reduce((s, t) => s + (t.rating ?? 0), 0) / rated.length) * 10) / 10
-    : null
+  const rawAvg = ratingAgg[0]?.avg
+  const avgRating = typeof rawAvg === "number" ? Math.round(rawAvg * 10) / 10 : null
   return { open, avgRating, last24h }
 }

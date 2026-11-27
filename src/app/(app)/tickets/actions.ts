@@ -10,6 +10,7 @@ import {
   createManualTicket,
   createSavedView,
   deleteSavedView,
+  mergeTicket,
   updateTicketTags,
 } from "@/server/modules/tickets"
 import type { TicketEvent } from "@/lib/ticket-state-machine"
@@ -146,5 +147,23 @@ export async function deleteSavedViewAction(id: string): Promise<ActionState> {
   return runAction(async () => {
     await deleteSavedView(ctx, id)
     revalidatePath("/tickets")
+  })
+}
+
+export async function mergeTicketAction(
+  _: ActionState<{ targetId: string }>,
+  form: FormData,
+): Promise<ActionState<{ targetId: string }>> {
+  const ctx = await requireTenantContext()
+  return runAction(async () => {
+    const sourceId = String(form.get("sourceId") ?? "")
+    const target = String(form.get("target") ?? "")
+    const reason = String(form.get("reason") ?? "").trim() || "Merged duplicate ticket"
+    const res = await mergeTicket(ctx, sourceId, target, reason)
+    revalidatePath(`/tickets/${sourceId}`)
+    revalidatePath(`/tickets/${res.target._id.toHexString()}`)
+    revalidatePath("/tickets")
+    revalidatePath("/dashboard")
+    return { targetId: res.target._id.toHexString() }
   })
 }

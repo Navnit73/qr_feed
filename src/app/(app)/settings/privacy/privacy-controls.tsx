@@ -1,15 +1,19 @@
 "use client"
 
-import { useActionState, useState, useTransition } from "react"
+import { useActionState, useState } from "react"
 import { FormField, FormMessage, SubmitButton } from "@/components/form"
+import { useSweetAlert } from "@/components/sweet-alert"
 import { Button } from "@/components/ui/button"
 import { anonymiseNowAction, deleteTenantAction, saveRetentionAction } from "./actions"
 
 export function PrivacyControls({ retentionDays, slug }: { retentionDays: number; slug: string }) {
   const [retState, retAction] = useActionState(saveRetentionAction, null)
   const [delState, delAction] = useActionState(deleteTenantAction, null)
-  const [pending, startTransition] = useTransition()
-  const [anonMsg, setAnonMsg] = useState<string | null>(null)
+  const [daysValue, setDaysValue] = useState(String(retentionDays))
+  const [anonMsg, setAnonMsg] = useState<{ text: string; isError: boolean } | null>(null)
+  const swal = useSweetAlert()
+
+  const activeDays = Math.min(3650, Math.max(30, Number(daysValue) || retentionDays))
 
   return (
     <div className="space-y-8">
@@ -20,7 +24,8 @@ export function PrivacyControls({ retentionDays, slug }: { retentionDays: number
           type="number"
           min={30}
           max={3650}
-          defaultValue={retentionDays}
+          value={daysValue}
+          onChange={(e) => setDaysValue(e.target.value)}
           hint="Reporter contact details on closed tickets older than this window can be anonymised."
           state={retState}
         />
@@ -31,18 +36,37 @@ export function PrivacyControls({ retentionDays, slug }: { retentionDays: number
             type="button"
             variant="outline"
             size="lg"
-            loading={pending}
             onClick={() =>
-              startTransition(async () => {
-                const r = await anonymiseNowAction(retentionDays)
-                if (r?.ok) setAnonMsg(`Anonymised ${r.data.count} closed ticket(s).`)
+              swal.fire({
+                tone: "warning",
+                title: "Anonymise eligible reporter PII?",
+                text: `Reporter names, emails and phone numbers on closed tickets older than ${activeDays} days will be permanently stripped.`,
+                confirmText: "Anonymise now",
+                cancelText: "Cancel",
+                confirmVariant: "destructive",
+                onConfirm: async () => {
+                  const r = await anonymiseNowAction(activeDays)
+                  if (r?.ok) {
+                    setAnonMsg({
+                      text: `Anonymised ${r.data.count} closed ticket(s).`,
+                      isError: false,
+                    })
+                  } else if (r) {
+                    setAnonMsg({ text: r.error.message, isError: true })
+                    throw new Error(r.error.message)
+                  }
+                },
               })
             }
           >
             Anonymise eligible PII now
           </Button>
         </div>
-        {anonMsg && <p className="text-sm text-success">{anonMsg}</p>}
+        {anonMsg && (
+          <p className={anonMsg.isError ? "text-sm text-destructive" : "text-sm text-success"}>
+            {anonMsg.text}
+          </p>
+        )}
       </form>
 
       <div className="max-w-md space-y-3 rounded-2xl border border-destructive/40 bg-destructive/5 p-5">

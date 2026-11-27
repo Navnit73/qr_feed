@@ -14,16 +14,23 @@ if (!mode || !file || !["dump", "restore"].includes(mode)) {
   process.exit(1)
 }
 
+let touchedDb = false
 try {
   if (mode === "dump") {
+    touchedDb = true
     const json = await dumpDatabaseToEjson()
     await writeFile(file, json, "utf8")
     console.info(`✓ Dumped database to ${file} (${json.length} bytes)`)
   } else {
     const json = await readFile(file, "utf8")
+    touchedDb = true
     const counts = await restoreDatabaseFromEjson(json)
     console.info("✓ Restored collections:", counts)
   }
 } finally {
-  await mongoClient().close()
+  if (touchedDb) {
+    await mongoClient()
+      .close()
+      .catch(() => {})
+  }
 }

@@ -18,7 +18,10 @@ export const metadata: Metadata = { title: "Verifications · QR Feed" }
 
 export default async function VerificationsPage() {
   const ctx = await requireTenantContext()
-  if (!can(ctx, "ticket:verify") && !can(ctx, "ticket:close")) redirect("/dashboard")
+  if (!can(ctx, "ticket:read") || (!can(ctx, "ticket:verify") && !can(ctx, "ticket:close"))) {
+    redirect("/dashboard")
+  }
+  const canReopen = can(ctx, "ticket:verify") || can(ctx, "ticket:assign")
 
   const { items } = await queryTickets(ctx, { status: "pending_verification", pageSize: 50 })
   // eslint-disable-next-line react-hooks/purity -- single server render per request
@@ -117,7 +120,11 @@ export default async function VerificationsPage() {
                 </div>
 
                 <div className="flex shrink-0 flex-col items-end gap-2">
-                  <VerifyQueueControls ticketId={id} ticketNumber={t.number} />
+                  <VerifyQueueControls
+                    ticketId={id}
+                    ticketNumber={t.number}
+                    canReopen={canReopen}
+                  />
                   <Link
                     href={`/tickets/${id}`}
                     className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"

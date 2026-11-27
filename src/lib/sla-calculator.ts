@@ -82,9 +82,20 @@ function getLocalParts(date: Date, timeZone: string): LocalParts {
   }
 }
 
+function localAsUtcMs(parts: LocalParts): number {
+  return Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    Math.floor(parts.minuteOfDay / 60),
+    parts.minuteOfDay % 60,
+  )
+}
+
 /**
  * Converts a wall-clock local date + minuteOfDay in `timeZone` back to a UTC Date.
- * Uses a two-step offset convergence that stays exact across DST and half-hour zones.
+ * Uses two-step offset convergence so both positive and negative DST transitions stay exact
+ * and spring-forward gaps never step backwards to the previous day.
  */
 function localToUtc(
   year: number,
@@ -95,17 +106,22 @@ function localToUtc(
 ): Date {
   const h = Math.floor(minuteOfDay / 60)
   const m = minuteOfDay % 60
-  const guessMs = Date.UTC(year, month - 1, day, h, m, 0, 0)
-  const read = getLocalParts(new Date(guessMs), timeZone)
-  const readAsUtcMs = Date.UTC(
-    read.year,
-    read.month - 1,
-    read.day,
-    Math.floor(read.minuteOfDay / 60),
-    read.minuteOfDay % 60,
-  )
-  const offsetMs = readAsUtcMs - guessMs
-  return new Date(guessMs - offsetMs)
+  const targetWallMs = Date.UTC(year, month - 1, day, h, m, 0, 0)
+
+  const offsetAt = (utcMs: number) => localAsUtcMs(getLocalParts(new Date(utcMs), timeZone)) - utcMs
+
+  const guess1 = targetWallMs - offsetAt(targetWallMs)
+  const guess2 = targetWallMs - offsetAt(guess1)
+
+  // If guess2 lands before the requested wall-clock (nonexistent spring-forward gap),
+  // advance to the post-transition instant so callers never step backwards in local time.
+  const check2 = localAsUtcMs(getLocalParts(new Date(guess2), timeZone))
+  if (check2 < targetWallMs) {
+    const check1 = localAsUtcMs(getLocalParts(new Date(guess1), timeZone))
+    if (check1 >= targetWallMs) return new Date(guess1)
+    return new Date(guess2 + (targetWallMs - check2))
+  }
+  return new Date(guess2)
 }
 
 function nextCalendarDay(year: number, month: number, day: number) {
@@ -213,7 +229,10 @@ export function computeSlaStatus(input: {
       state: "breached",
       remainingMs,
       elapsedRatio: Math.max(1, elapsedRatio),
-      label: `Breached ${formatDuration(Math.abs(remainingMs))} ago`,
+      label:
+        remainingMs <= 0
+          ? `Breached ${formatDuration(Math.abs(remainingMs))} ago`
+          : `Breached · ${formatDuration(remainingMs)} left`,
     }
   }
 

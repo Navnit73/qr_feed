@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import { ObjectId } from "mongodb"
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { EmptyState } from "@/components/cards/empty-state"
@@ -10,9 +11,8 @@ import { requireTenantContext } from "@/server/auth/session"
 import { listBranches } from "@/server/modules/branches"
 import { listCategories } from "@/server/modules/categories"
 import { ticketStats } from "@/server/modules/intake"
-import { listMembers } from "@/server/modules/members"
 import { getTenant } from "@/server/modules/tenants"
-import { listSavedViews, queryTickets } from "@/server/modules/tickets"
+import { listAssignableMembers, listSavedViews, queryTickets } from "@/server/modules/tickets"
 import { can } from "@/server/rbac/ability"
 import { locations } from "@/server/repositories"
 import { NewTicketDialog, TicketBoard, type TicketRow } from "./ticket-controls"
@@ -25,13 +25,18 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
 
   const sp = await searchParams
   const str = (v: unknown) => (typeof v === "string" && v !== "all" ? v : undefined)
-  const page = Math.max(1, Number(sp.page) || 1)
+  const oidStr = (v: unknown) => {
+    const s = str(v)
+    return s && ObjectId.isValid(s) ? s : undefined
+  }
+  const rawPage = Number(sp.page)
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
   const view = sp.view === "kanban" ? "kanban" : "table"
   const filters = {
     status: str(sp.status),
     severity: str(sp.severity),
-    branchId: str(sp.branchId),
-    categoryId: str(sp.categoryId),
+    branchId: oidStr(sp.branchId),
+    categoryId: oidStr(sp.categoryId),
     assigneeId: str(sp.assigneeId),
     q: str(sp.q),
   }
@@ -43,7 +48,7 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
       ticketStats(ctx),
       can(ctx, "branch:read") ? listBranches(ctx) : [],
       listCategories(ctx, tenant?.industry ?? "other"),
-      can(ctx, "user:read") ? listMembers(ctx) : [],
+      listAssignableMembers(ctx),
       can(ctx, "ticket:create")
         ? locations.forTenant(ctx).find({ status: "active" }, { sort: { path: 1 }, limit: 200 })
         : [],
@@ -66,22 +71,32 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
     assigneeName: t.assignee?.name ?? null,
     currentLevel: t.currentLevel ?? 1,
     slaBreached: Boolean(t.sla?.breached),
-    slaPaused: Boolean(t.sla?.pausedAt),
+    slaPausedAt: t.sla?.pausedAt ? t.sla.pausedAt.toISOString() : null,
+    slaResolvedAt: t.sla?.resolvedAt ? t.sla.resolvedAt.toISOString() : null,
     resolveDueAt: t.sla?.resolveDueAt ? t.sla.resolveDueAt.toISOString() : null,
     createdAt: t.createdAt.toISOString(),
   }))
 
   const branchOptions = branchDocs.map((b) => ({ value: b._id.toHexString(), label: b.name }))
   const categoryOptions = categoryDocs.map((c) => ({ value: c._id.toHexString(), label: c.label }))
-  const memberOptions = memberDocs
-    .filter((m) => m.status === "active")
-    .map((m) => ({ value: m.userId, label: m.name }))
+  const memberOptions = memberDocs.map((m) => ({ value: m.userId, label: m.name }))
   const locationOptions = locationDocs.map((l) => ({
     value: l._id.toHexString(),
     label: l.path.join(" › "),
+    branchId: l.branchId.toHexString(),
   }))
 
   const hasFilters = Object.values(filters).some(Boolean)
+
+  function pageHref(targetPage: number) {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      if (v) qs.set(k, v)
+    }
+    if (view === "kanban") qs.set("view", "kanban")
+    qs.set("page", String(targetPage))
+    return `?${qs.toString()}`
+  }
 
   return (
     <>
@@ -137,6 +152,8 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
             filters: v.filters,
           }))}
           canAssign={can(ctx, "ticket:assign")}
+          canWork={can(ctx, "ticket:work")}
+          canClose={can(ctx, "ticket:close")}
           now={now}
         />
       )}
@@ -149,7 +166,7 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
           <span className="flex gap-2">
             {meta.page > 1 && (
               <Link
-                href={`?page=${meta.page - 1}`}
+                href={pageHref(meta.page - 1)}
                 className={buttonVariants({ variant: "outline", size: "lg" })}
               >
                 Newer
@@ -157,7 +174,7 @@ export default async function TicketsPage({ searchParams }: PageProps<"/tickets"
             )}
             {meta.page < meta.totalPages && (
               <Link
-                href={`?page=${meta.page + 1}`}
+                href={pageHref(meta.page + 1)}
                 className={buttonVariants({ variant: "outline", size: "lg" })}
               >
                 Older

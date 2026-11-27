@@ -45,7 +45,8 @@ export async function seedCategories(
 export async function listCategories(ctx: TenantContext, industry: Industry) {
   const repo = categories.forTenant(ctx)
   let list = await repo.find({ active: true }, { sort: { order: 1 } })
-  if (list.length === 0) {
+  // Only lazily seed when the tenant has zero categories at all (not when all were intentionally disabled).
+  if (list.length === 0 && (await repo.count({})) === 0) {
     await seedCategories(ctx, industry).catch(() => {
       // A concurrent request seeded first (unique key); re-read below.
     })
@@ -84,7 +85,7 @@ export async function createCategory(ctx: TenantContext, raw: z.input<typeof cat
           requiresRCA: input.requiresRCA,
           requiresResolutionEvidence: input.requiresResolutionEvidence,
           order: count,
-          active: true,
+          active: input.active,
         },
         { session },
       )

@@ -8,7 +8,7 @@ export default function DpaPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-12 sm:px-6">
       <Link
-        href="/"
+        href="/sign-in"
         className={buttonVariants({ variant: "ghost", size: "sm", className: "mb-6" })}
       >
         ← Back to QR Feed

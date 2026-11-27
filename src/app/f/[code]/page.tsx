@@ -13,8 +13,8 @@ export const metadata: Metadata = { title: "Report an issue", robots: { index: f
 /** What a guest sees after scanning. No login, mobile first, fast on poor networks. */
 export default function FeedbackPage(props: PageProps<"/f/[code]">) {
   return (
-    <main className="mx-auto min-h-dvh w-full max-w-md px-4 py-6">
-      <Suspense fallback={<Skeleton className="h-[32rem]" />}>
+    <main className="mx-auto min-h-dvh w-full max-w-md sm:py-6">
+      <Suspense fallback={<Skeleton className="m-4 h-[32rem]" />}>
         <Feedback {...props} />
       </Suspense>
     </main>
@@ -34,7 +34,7 @@ async function Feedback({ params, searchParams }: PageProps<"/f/[code]">) {
 
   if (!qr) {
     return (
-      <div className="mt-16 text-center" dir={isRtlLocale(locale) ? "rtl" : "ltr"}>
+      <div className="mt-16 px-4 text-center" dir={isRtlLocale(locale) ? "rtl" : "ltr"}>
         <span className="mx-auto grid size-14 place-items-center rounded-full bg-muted">
           <Icon name="qr" className="size-7 text-muted-foreground" />
         </span>
@@ -47,37 +47,30 @@ async function Feedback({ params, searchParams }: PageProps<"/f/[code]">) {
   await recordScan(qr.qrId)
   const parents = qr.locationPath.slice(0, -1)
   const brandStyle = qr.branding?.primaryColor
-    ? ({ "--primary": qr.branding.primaryColor } as CSSProperties)
+    ? ({
+        "--primary": qr.branding.primaryColor,
+        "--primary-hover": qr.branding.primaryColor,
+        "--ring": qr.branding.primaryColor,
+      } as CSSProperties)
     : undefined
 
   return (
     <div style={brandStyle}>
-      <header className="mb-4">
-        {qr.branding?.logoUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={qr.branding.logoUrl}
-            alt={qr.tenantName}
-            className="mb-3 h-8 w-auto max-w-40 object-contain"
-          />
-        )}
-        <p className="text-sm text-muted-foreground">
-          {qr.tenantName} · {qr.branchName}
-          {parents.length > 0 && ` · ${parents.join(" › ")}`}
-        </p>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight text-balance">{qr.locationName}</h1>
-      </header>
       <FeedbackForm
         code={code}
+        place={{
+          tenantName: qr.tenantName,
+          branchName: qr.branchName,
+          parents,
+          locationName: qr.locationName,
+          logoUrl: qr.branding?.logoUrl,
+        }}
         categories={qr.categories.map((c) => ({ id: c.id, key: c.key, label: c.label }))}
         sensitive={qr.industry === "hospital" || qr.industry === "clinic"}
         initialLocale={locale}
         disclaimer={qr.branding?.publicDisclaimer}
         turnstileSiteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || undefined}
       />
-      <p className="mt-8 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-        <Icon name="qr" className="size-3.5" /> {t.poweredBy}
-      </p>
     </div>
   )
 }

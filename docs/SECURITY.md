@@ -29,5 +29,5 @@
 
 ## Backup, Recovery & Secrets Rotation
 
-- Production MongoDB Atlas PITR (RPO ≤ 5 min, RTO ≤ 30 min) complemented by `scripts/backup-restore.mts` and automated drill test `src/server/backup-restore.int.test.ts`.
+- Production MongoDB Atlas PITR (RPO ≤ 5 min, RTO ≤ 30 min) complemented by `scripts/backup-restore.mts` and automated drill test `src/server/db/backup-restore.int.test.ts`.
 - Rotating `BETTER_AUTH_SECRET`, `STORAGE_SECRET_ACCESS_KEY`, `CRON_SECRET`, or webhook/API keys requires zero schema migration.

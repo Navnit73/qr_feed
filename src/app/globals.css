@@ -228,7 +228,7 @@
 
   --success: var(--color-emerald-700);
   --success-foreground: var(--color-white);
-  --warning: var(--color-orange-600);
+  --warning: var(--color-orange-700);
   --warning-foreground: var(--color-white);
   --destructive: var(--color-rose-600);
   --destructive-foreground: var(--color-white);
@@ -265,7 +265,7 @@
   --popover-foreground: var(--color-white);
 
   --primary: var(--color-indigo-500);
-  --primary-hover: var(--color-indigo-400);
+  --primary-hover: var(--color-indigo-600);
   --primary-foreground: var(--color-white);
   --secondary: var(--color-indigo-950);
   --secondary-hover: var(--color-indigo-900);
@@ -279,7 +279,7 @@
   --success-foreground: var(--color-black);
   --warning: var(--color-orange-500);
   --warning-foreground: var(--color-black);
-  --destructive: var(--color-rose-500);
+  --destructive: var(--color-rose-600);
   --destructive-foreground: var(--color-white);
   --info: var(--color-sky-500);
   --info-foreground: var(--color-black);

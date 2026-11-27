@@ -117,4 +117,19 @@ describe("sanitizeImage (T-UP-1)", () => {
     const big = Buffer.concat([makeJpegWithExif(), Buffer.alloc(MAX_IMAGE_BYTES + 10)])
     expect(() => sanitizeImage(big)).toThrow(/MB/i)
   })
+
+  it("strips post-EOI trailing payloads and rejects JPEG polyglots and empty WebP files", () => {
+    const withTail = Buffer.concat([makeJpegWithExif("GPS_1"), Buffer.from("TRAILING_EXIF_LEAK")])
+    const cleaned = sanitizeImage(withTail)
+    expect(cleaned.buffer.toString("utf8")).not.toContain("TRAILING_EXIF_LEAK")
+    expect(cleaned.buffer.subarray(-2)).toEqual(Buffer.from([0xff, 0xd9]))
+
+    // Polyglot starting with JPEG magic bytes followed by non-marker payload
+    const polyglot = Buffer.from([0xff, 0xd8, 0xff, 0x01, 0x3c, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74])
+    expect(() => sanitizeImage(polyglot)).toThrow(ApiError)
+
+    // Minimal 12-byte RIFF/WEBP without any VP8/VP8L/VP8X image chunk
+    const emptyWebp = Buffer.from("RIFF\x04\x00\x00\x00WEBP", "binary")
+    expect(() => sanitizeImage(emptyWebp)).toThrow(ApiError)
+  })
 })

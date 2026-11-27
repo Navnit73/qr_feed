@@ -78,6 +78,13 @@ describe("audit log", () => {
     expect((await listAudit(ctx)).items.map((e) => e.seq)).toEqual([3, 2, 1])
   })
 
+  it("detects tail truncation when the latest audit entry is removed", async () => {
+    const ctx = testContext()
+    for (let i = 1; i <= 3; i++) await appendAudit(ctx, entry(i))
+    await db().collection("auditLogs").deleteOne({ tenantId: ctx.tenantId, seq: 3 })
+    expect(await verifyChain(ctx)).toEqual({ ok: false, count: 2, brokenAtSeq: 3 })
+  })
+
   it("has no update or delete path", async () => {
     const ctx = testContext()
     const e = await appendAudit(ctx, entry(1))
